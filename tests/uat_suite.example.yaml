@@ -1,0 +1,73 @@
+suite: "sales_datamart_uat"
+version: "v1"
+connection_env: "SYNAPSE_UAT_CONN_STR"
+
+checks:
+  - id: "schema_fact_sales"
+    category: "schema"
+    description: "fact_sales 表结构与预期一致"
+    severity: "blocker"
+    type: "schema"
+    params:
+      table: "dbo.fact_sales"
+      allow_extra: true
+      expected_columns:
+        - {name: "sale_id", type: "bigint"}
+        - {name: "store_id", type: "int"}
+        - {name: "sale_date", type: "date"}
+        - {name: "product_category", type: "varchar"}
+        - {name: "revenue", type: "decimal"}
+
+  - id: "row_count_fact_sales_vs_dev"
+    category: "data_quality"
+    description: "fact_sales 行数相比DEV环境偏差不超过5%"
+    severity: "blocker"
+    type: "row_count"
+    params:
+      sql: "SELECT COUNT(*) AS cnt FROM dbo.fact_sales"
+      baseline_sql: "SELECT COUNT(*) AS cnt FROM dev.dbo.fact_sales"
+      tolerance_pct: 5
+
+  - id: "null_rate_store_id"
+    category: "data_quality"
+    description: "store_id 不允许为空"
+    severity: "blocker"
+    type: "null_rate"
+    params:
+      table: "dbo.fact_sales"
+      column: "store_id"
+      threshold_pct: 0
+
+  - id: "dup_sale_id"
+    category: "data_quality"
+    description: "sale_id 必须唯一"
+    severity: "blocker"
+    type: "duplicates"
+    params:
+      table: "dbo.fact_sales"
+      key_columns: ["sale_id"]
+
+  - id: "revenue_total_matches_finance"
+    category: "business_logic"
+    description: "总收入与财务系统核对值一致（容差100元）"
+    severity: "blocker"
+    type: "aggregate"
+    params:
+      sql: "SELECT SUM(revenue) AS total_revenue FROM dbo.fact_sales WHERE sale_date >= '2026-01-01'"
+      expected:
+        total_revenue: 1234567.89
+      tolerance_abs: 100
+
+  - id: "pivot_ready_fact_sales"
+    category: "pivot_readiness"
+    description: "门店维度和收入度量字段满足Pivot Table使用要求"
+    severity: "warning"
+    type: "pivot_readiness"
+    params:
+      table: "dbo.fact_sales"
+      required_columns: ["store_id", "sale_date", "revenue", "product_category"]
+      measure_columns: ["revenue"]
+      dimension_columns:
+        product_category:
+          max_cardinality: 500
+          null_threshold_pct: 0

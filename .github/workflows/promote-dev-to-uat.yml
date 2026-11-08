@@ -1,0 +1,79 @@
+name: Promote dev -> uat (automatic)
+
+# Fully automated, by design: deploys the dev-validated procedure to UAT, runs
+# the validation suite there, and -- only if it passes -- merges `dev` into
+# `uat` and pushes. There is NO human review in this step; the human review
+# gate in this pipeline is uat -> prd (uat-to-prd-gate.yml), not this one.
+#
+# If you later add branch-protection rules on `uat` that require a review,
+# this direct push will start failing: either exempt this workflow's token
+# from that rule, or switch the last step to open a PR and auto-merge it
+# instead of pushing directly.
+#
+# NOTE: this workflow hardcodes one proc/suite/exec-statement as a worked
+# example. With more than one stored procedure under test, replace the
+# "Deploy to UAT and validate" step with a loop over a manifest file that
+# maps each procs/*.sql to its suite and EXEC statement.
+
+on:
+  push:
+    branches: [dev]
+    paths:
+      - "procs/**.sql"
+      - "tests/**.yaml"
+
+permissions:
+  contents: write
+
+jobs:
+  promote:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install the Microsoft ODBC driver for SQL Server
+        run: |
+          curl -sSL -O https://packages.microsoft.com/config/ubuntu/22.04/packages-microsoft-prod.deb
+          sudo dpkg -i packages-microsoft-prod.deb
+          sudo apt-get update
+          sudo ACCEPT_EULA=Y apt-get install -y msodbcsql18
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run unit tests
+        run: python -m pytest -q
+
+      - name: Deploy to UAT and validate
+        env:
+          SYNAPSE_UAT_CONN_STR: ${{ secrets.SYNAPSE_UAT_CONN_STR }}
+        run: |
+          python -m harness.promote_cli \
+            --proc procs/sp_refresh_fact_sales.example.sql \
+            --exec-statement "EXEC dbo.sp_refresh_fact_sales" \
+            --suite tests/golden_fact_sales.example.yaml \
+            --allowed-schema dbo \
+            --conn-env SYNAPSE_UAT_CONN_STR
+
+      - name: Upload report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: uat-promotion-report
+          path: reports/
+          if-no-files-found: ignore
+
+      - name: Merge dev into uat
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git fetch origin uat
+          git checkout uat
+          git merge --no-ff origin/dev -m "Auto-merge dev into uat: validated against UAT"
+          git push origin uat
