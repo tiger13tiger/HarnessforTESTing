@@ -13,6 +13,7 @@ CHECK_MODULES = {
     "schema": "harness.checks.schema",
     "aggregate": "harness.checks.aggregate",
     "pivot_readiness": "harness.checks.pivot_readiness",
+    "golden_rows": "harness.checks.golden_rows",
 }
 
 

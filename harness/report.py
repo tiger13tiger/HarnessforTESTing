@@ -67,3 +67,35 @@ def write_reports(results, suite_name: str, suite_version: str, output_dir) -> d
     (output_dir / "summary.json").write_text(json.dumps(summary, indent=2, ensure_ascii=False), encoding="utf-8")
 
     return summary
+
+
+def write_evolve_report(success: bool, history, output_dir) -> dict:
+    """Writes evolve_report.md / evolve_summary.json for the auto-fix loop in harness/evolve.py."""
+    output_dir = Path(output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    lines = [
+        "# Stored Procedure Auto-Fix Report",
+        "",
+        f"- Result: {'PASS' if success else 'FAIL (exhausted iterations without a human reviewing them)'}",
+        f"- Iterations: {len(history)}",
+        "",
+    ]
+    for it in history:
+        lines.append(f"## Attempt {it.attempt}")
+        if it.guardrail_error:
+            lines.append(f"- **blocked by guardrail (never deployed):** {it.guardrail_error}")
+            lines.append("")
+            continue
+        lines.append(f"- gate: {'FAIL' if it.gate_failed else 'PASS'}")
+        for r in it.results:
+            lines.append(f"  - `{r.id}` ({r.category}, {r.severity}): **{r.status}** — {r.message}")
+        if it.rationale:
+            lines += ["", "<details><summary>LLM rationale for the next candidate</summary>", "", it.rationale, "", "</details>"]
+        lines.append("")
+
+    (output_dir / "evolve_report.md").write_text("\n".join(lines), encoding="utf-8")
+
+    summary = {"success": success, "iterations": len(history)}
+    (output_dir / "evolve_summary.json").write_text(json.dumps(summary, indent=2, ensure_ascii=False), encoding="utf-8")
+    return summary

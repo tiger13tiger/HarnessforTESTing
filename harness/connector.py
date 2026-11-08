@@ -1,4 +1,5 @@
-"""Connections to Azure Synapse SQL, for executing test queries."""
+"""Connections to Azure Synapse SQL, for executing test queries and -- for the
+evolve loop -- deploying/running a candidate stored procedure."""
 import os
 
 TRANSIENT_SQLSTATES = {"08S01", "HYT00", "40001", "40613"}
@@ -36,6 +37,25 @@ class SynapseConnector:
                     return []
                 columns = [c[0] for c in cursor.description]
                 return [dict(zip(columns, row)) for row in cursor.fetchall()]
+        except pyodbc.Error as exc:
+            sqlstate = exc.args[0] if exc.args else ""
+            if sqlstate in TRANSIENT_SQLSTATES:
+                raise TransientError(str(exc)) from exc
+            raise
+
+    def execute(self, sql: str, params: list | None = None) -> None:
+        """Runs a non-query statement (DDL like CREATE OR ALTER PROCEDURE, or EXEC).
+
+        Callers (notably harness/evolve.py) are responsible for guardrail-checking
+        the SQL before it reaches here -- this method does not re-validate it.
+        """
+        import pyodbc
+
+        try:
+            with pyodbc.connect(self.conn_str, timeout=self.query_timeout, autocommit=True) as conn:
+                conn.timeout = self.query_timeout
+                cursor = conn.cursor()
+                cursor.execute(sql, params or [])
         except pyodbc.Error as exc:
             sqlstate = exc.args[0] if exc.args else ""
             if sqlstate in TRANSIENT_SQLSTATES:
