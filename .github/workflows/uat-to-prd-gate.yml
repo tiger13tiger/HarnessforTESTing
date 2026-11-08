@@ -40,3 +40,11 @@ jobs:
         env:
           SYNAPSE_UAT_CONN_STR: ${{ secrets.SYNAPSE_UAT_CONN_STR }}
         run: python -m harness.cli --config tests/golden_fact_sales.example.yaml --conn-env SYNAPSE_UAT_CONN_STR
+
+      - name: Upload report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: uat-validation-report
+          path: reports/
+          if-no-files-found: ignore

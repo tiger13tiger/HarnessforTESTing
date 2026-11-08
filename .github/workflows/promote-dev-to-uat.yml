@@ -61,6 +61,14 @@ jobs:
             --allowed-schema dbo \
             --conn-env SYNAPSE_UAT_CONN_STR
 
+      - name: Upload report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: uat-promotion-report
+          path: reports/
+          if-no-files-found: ignore
+
       - name: Merge dev into uat
         run: |
           git config user.name "github-actions[bot]"
