@@ -1,13 +1,14 @@
-name: UAT Data Validation Gate
+name: UAT -> PRD Gate (human-reviewed)
 
-# This is the validation-only gate: it deploys/validates against UAT and
-# fails the PR if the data doesn't match. It does NOT run the auto-fix loop --
-# that runs locally (harness/evolve_cli.py) before you open the PR. Keeping
-# the LLM-driven fix loop out of CI means every change going into main was
-# already reviewed by a human as a normal pull request.
+# This is the ONE manual gate in the pipeline: a pull request from `uat` into
+# `main` (= prd). dev -> uat is fully automated (see promote-dev-to-uat.yml);
+# this step is deliberately not. It re-validates against UAT so the test
+# analyst reviewing the PR sees a fresh pass/fail, but merging is a human
+# decision -- nothing here auto-merges.
 
 on:
   pull_request:
+    branches: [main]
     paths:
       - "procs/**.sql"
       - "tests/**.yaml"
@@ -35,7 +36,7 @@ jobs:
       - name: Run unit tests (no Synapse connection needed)
         run: python -m pytest -q
 
-      - name: Run the validation suite against UAT
+      - name: Re-validate against UAT
         env:
           SYNAPSE_UAT_CONN_STR: ${{ secrets.SYNAPSE_UAT_CONN_STR }}
-        run: python -m harness.cli --config tests/uat_suite.example.yaml --conn-env SYNAPSE_UAT_CONN_STR
+        run: python -m harness.cli --config tests/golden_fact_sales.example.yaml --conn-env SYNAPSE_UAT_CONN_STR

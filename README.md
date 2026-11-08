@@ -1,10 +1,24 @@
 # HarnessforTESTing
 
-A testing harness for data pulled through Azure Synapse SQL / data warehouse,
-built for the UAT gate before a release is pushed to PRD. A test analyst runs
-it against the UAT environment; it checks the data the way the business will
-actually consume it (including via Excel pivot tables) and produces a
-pass/fail report.
+A testing harness for data pulled through Azure Synapse SQL / data warehouse.
+It follows a `dev` → `uat` → `main` (prd) branch flow:
+
+1. **dev** — you optimize a stored procedure; `harness/evolve_cli.py` can
+   deploy it, check the result against business-verified figures, and ask an
+   LLM to fix it when it doesn't match, looping until it passes. `--push`
+   commits and pushes the final version automatically.
+2. **dev → uat** — fully automatic. `.github/workflows/promote-dev-to-uat.yml`
+   fires on push to `dev`, deploys the proc to UAT, re-validates it there,
+   and — only if that passes — merges `dev` into `uat` and pushes. No human
+   review in this step, by design.
+3. **uat → prd** — the one manual gate. A human (the test analyst) opens a
+   PR from `uat` into `main`; `.github/workflows/uat-to-prd-gate.yml`
+   re-validates against UAT as a required check, but merging stays a human
+   decision.
+
+This maps directly onto the existing process: dev and uat are where
+iteration happens freely, and prd only ever gets what a person actually
+signed off on.
 
 ## Why this shape
 
@@ -83,62 +97,89 @@ Unit tests run against `harness/mock_connector.py`, a fixed-answer
 connector — no real database, no ODBC driver required. Use it to prove a
 new check catches the defect it's meant to catch before pointing it at UAT.
 
-## The auto-fix loop (harness/evolve_cli.py)
+## Stage 1 — dev: the auto-fix loop (harness/evolve_cli.py)
 
-Your actual dev flow: optimize a stored procedure → push it to the warehouse
-→ refresh the semantic model's partitions → eyeball the result in a pivot
-table. This tool automates the last two steps of validating that: given a
-candidate `CREATE OR ALTER PROCEDURE` and the numbers you already verified
-by hand in a pivot table, it deploys the candidate, runs it, checks the
-result against those numbers, and — if it doesn't match — asks an LLM to
-revise the procedure and tries again, up to a hard iteration cap.
+Your actual dev flow: optimize a stored procedure → push it → refresh the
+semantic model's partitions → eyeball the result in a pivot table. This tool
+automates the validate/fix part of that: given a candidate
+`CREATE OR ALTER PROCEDURE` and the numbers you already verified by hand in
+a pivot table, it deploys the candidate to DEV, runs it, checks the result
+against those numbers, and — if it doesn't match — asks an LLM to revise the
+procedure and tries again, up to a hard iteration cap.
 
 ```bash
-export SYNAPSE_SANDBOX_CONN_STR="Driver={ODBC Driver 18 for SQL Server};Server=tcp:<workspace>.sql.azuresynapse.net,1433;Database=<db>;Uid=<user>;Pwd=<password>;Encrypt=yes;"
+export SYNAPSE_DEV_CONN_STR="Driver={ODBC Driver 18 for SQL Server};Server=tcp:<dev-workspace>.sql.azuresynapse.net,1433;Database=<db>;Uid=<user>;Pwd=<password>;Encrypt=yes;"
 export ANTHROPIC_API_KEY="sk-..."
 
 python -m harness.evolve_cli \
     --proc procs/sp_refresh_fact_sales.example.sql \
-    --exec-statement "EXEC sandbox.sp_refresh_fact_sales" \
+    --exec-statement "EXEC dbo.sp_refresh_fact_sales" \
     --suite tests/golden_fact_sales.example.yaml \
-    --allowed-schema sandbox
+    --allowed-schema dbo \
+    --conn-env SYNAPSE_DEV_CONN_STR \
+    --push
 ```
 
 **Safety design — read this before running it for real:**
 
-- **Sandbox-only, by construction.** Every candidate is checked by
-  `harness/guardrails.py` *before* it's ever deployed: it must be exactly
-  one `CREATE OR ALTER PROCEDURE` statement, targeting the schema you pass
-  via `--allowed-schema`, with no `DROP DATABASE`/`TRUNCATE TABLE`/
+- **Guardrail-checked before every deploy.** `harness/guardrails.py` checks
+  each candidate *before* it's deployed: it must be exactly one
+  `CREATE OR ALTER PROCEDURE` statement, targeting the schema you pass via
+  `--allowed-schema`, with no `DROP DATABASE`/`TRUNCATE TABLE`/
   `xp_cmdshell`/etc. A candidate that fails this is rejected without
-  touching the database at all. This is a text-level allow-list, not a
-  full security boundary — back it with a least-privilege DB login that
-  can only touch the sandbox schema (`SYNAPSE_SANDBOX_CONN_STR` should
-  point at credentials scoped that way, never your UAT/PRD admin login).
-- **Never auto-commits, never auto-pushes, never opens a PR.** On success
-  it writes the final SQL to `--output-proc` (default: overwrites `--proc`)
-  and the full iteration history to `reports/evolve_report.md` — you review
-  and commit it yourself. The LLM is driving a sandbox, not your git
-  history.
-- **Where the actual CI gate lives.** `.github/workflows/uat-gate.yml` is
-  the gate that runs in GitHub Actions on a pull request — it only
-  *validates* (via `harness/cli.py`) against UAT, it never calls the LLM.
-  So the flow is: run the evolve loop locally until it passes → commit the
-  fixed proc + commit/update the golden suite → open a PR → the Actions
-  gate re-validates against UAT → merge after human review. The LLM-driven
-  loop stays out of the CI job on purpose, so nothing lands in `main`
-  without a human having reviewed the actual diff.
+  touching the database at all. This is a text-level allow-list, not a full
+  security boundary — the real isolation is that `--conn-env` should point
+  at your DEV environment, physically separate from UAT/PRD, with
+  least-privilege credentials.
+- **`--push` is opt-in and scoped to dev.** Without it, nothing is
+  committed — the final SQL and iteration report are just local files for
+  you to review. With it, the loop commits and pushes the final passing
+  proc to whatever branch you're on once it converges. This is the one
+  place in the pipeline that pushes code automatically; it's deliberately
+  limited to dev, where a bad push costs you a re-run, not a UAT/PRD
+  incident.
 - **Data governance.** The candidate SQL (and your schema) is sent to
   Anthropic's API by default (`harness/llm_client.py`'s
-  `AnthropicLLMClient`). If company policy requires routing this through
-  an approved tenant (e.g. your own Azure OpenAI deployment) instead,
-  swap in a different `LLMClient` implementation — `suggest_fix()` is the
-  only method to implement.
+  `AnthropicLLMClient`). If company policy requires routing this through an
+  approved tenant (e.g. your own Azure OpenAI deployment) instead, swap in
+  a different `LLMClient` implementation — `suggest_fix()` is the only
+  method to implement.
 
 Each iteration's checks, pass/fail, and the LLM's stated rationale for its
-next attempt are all recorded in `reports/evolve_report.md`, so a human
-reviewing the eventual PR can see *why* the procedure changed, not just the
-diff.
+next attempt are recorded in `reports/evolve_report.md`.
+
+## Stage 2 — dev → uat: automatic promotion (harness/promote_cli.py)
+
+`.github/workflows/promote-dev-to-uat.yml` fires on every push to `dev`. It
+deploys the already-converged procedure to UAT (via `harness/promote.py` —
+no LLM call here, just guardrail-check → deploy → validate), and if that
+passes, merges `dev` into `uat` and pushes. No human approves this step; the
+guardrail check and the UAT validation are what stand in for review. If
+validation fails, the workflow fails and `dev`/`uat` are left untouched —
+go back to stage 1.
+
+Run it by hand the same way the workflow does:
+
+```bash
+python -m harness.promote_cli \
+    --proc procs/sp_refresh_fact_sales.example.sql \
+    --exec-statement "EXEC dbo.sp_refresh_fact_sales" \
+    --suite tests/golden_fact_sales.example.yaml \
+    --allowed-schema dbo \
+    --conn-env SYNAPSE_UAT_CONN_STR
+```
+
+This workflow hardcodes one proc/suite as a worked example; with more than
+one stored procedure under test, replace that step with a loop over a
+manifest file mapping each `procs/*.sql` to its suite and EXEC statement.
+
+## Stage 3 — uat → prd: the one manual gate
+
+Promotion to `main` (prd) is a normal pull request from `uat`, opened by a
+person. `.github/workflows/uat-to-prd-gate.yml` re-validates against UAT as
+a required check on that PR, but merging is a human decision — this
+workflow never merges anything. This is where your test analyst's sign-off
+actually happens.
 
 ## Adding a check
 
@@ -151,10 +192,18 @@ diff.
 
 ## Not yet wired up (by design, until needed)
 
-- **Actual deployment to UAT/PRD**: nothing here pushes a passing procedure
-  into UAT or PRD — that's your existing release process. This harness only
-  validates (and, in the sandbox, iterates on) what's about to go there.
+- **Actual deployment to PRD**: merging the `uat` → `main` PR updates the
+  repo, not PRD itself — hooking that merge up to your real PRD deployment
+  process (however you currently push to PRD) is outside this harness's
+  scope.
+- **Multi-procedure manifest**: both `promote-dev-to-uat.yml` and
+  `uat-to-prd-gate.yml` hardcode one proc/suite pair as a worked example.
+  Generalizing to "every `.sql` under `procs/` with its own suite" needs a
+  small manifest file and a loop in those two workflows.
 - **Per-environment connection management**: `connection_env` in the suite
   file names the env var to read; how those secrets get into the shell
   (Azure Key Vault, GitHub Actions secrets, Azure DevOps variable groups,
   etc.) is outside this harness's scope.
+- **Branch protection on `uat`**: the promotion workflow pushes directly to
+  `uat`. If you add a required-review rule there later, exempt the
+  workflow's token or switch that step to a PR + auto-merge.
