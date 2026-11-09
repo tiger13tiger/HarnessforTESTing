@@ -1,6 +1,6 @@
 """Entry point for the auto-fix loop, meant to run against your DEV environment.
 
-Example:
+Example (Anthropic, the default):
     SYNAPSE_DEV_CONN_STR="Driver=...;Server=...;Database=...;Uid=...;Pwd=..." \\
     ANTHROPIC_API_KEY="sk-..." \\
         python -m harness.evolve_cli \\
@@ -9,6 +9,18 @@ Example:
             --suite tests/golden_fact_sales.yaml \\
             --allowed-schema dbo \\
             --conn-env SYNAPSE_DEV_CONN_STR \\
+            --push
+
+Example (DeepSeek):
+    SYNAPSE_DEV_CONN_STR="Driver=...;Server=...;Database=...;Uid=...;Pwd=..." \\
+    DEEPSEEK_API_KEY="sk-..." \\
+        python -m harness.evolve_cli \\
+            --proc procs/sp_refresh_fact_sales.sql \\
+            --exec-statement "EXEC dbo.sp_refresh_fact_sales" \\
+            --suite tests/golden_fact_sales.yaml \\
+            --allowed-schema dbo \\
+            --conn-env SYNAPSE_DEV_CONN_STR \\
+            --provider deepseek \\
             --push
 
 Without --push (the default), this never commits, pushes or opens a PR on its
@@ -27,8 +39,10 @@ from pathlib import Path
 from harness.config import load_suite
 from harness.connector import SynapseConnector
 from harness.evolve import evolve
-from harness.llm_client import AnthropicLLMClient
+from harness.llm_client import AnthropicLLMClient, DeepSeekLLMClient
 from harness.report import write_evolve_report
+
+DEFAULT_MODELS = {"anthropic": "claude-opus-5-5", "deepseek": "deepseek-chat"}
 
 
 def _commit_and_push(path: Path, message: str) -> bool:
@@ -55,16 +69,18 @@ def main(argv=None) -> int:
     parser.add_argument("--max-iterations", type=int, default=5)
     parser.add_argument("--output-dir", default="reports")
     parser.add_argument("--output-proc", default=None, help="where to write the final passing proc SQL (default: overwrite --proc)")
-    parser.add_argument("--model", default="claude-opus-5-5")
+    parser.add_argument("--provider", choices=["anthropic", "deepseek"], default="anthropic", help="which LLM to call for fixes")
+    parser.add_argument("--model", default=None, help="model id; defaults to a sensible choice for --provider")
     parser.add_argument("--push", action="store_true", help="commit and push the final proc to the current branch once it passes")
     args = parser.parse_args(argv)
 
     initial_sql = Path(args.proc).read_text(encoding="utf-8")
     suite = load_suite(args.suite)
+    model = args.model or DEFAULT_MODELS[args.provider]
 
     try:
         connector = SynapseConnector(env_var=args.conn_env)
-        llm_client = AnthropicLLMClient(model=args.model)
+        llm_client = DeepSeekLLMClient(model=model) if args.provider == "deepseek" else AnthropicLLMClient(model=model)
     except RuntimeError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1

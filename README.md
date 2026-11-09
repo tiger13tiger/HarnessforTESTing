@@ -138,12 +138,18 @@ python -m harness.evolve_cli \
   place in the pipeline that pushes code automatically; it's deliberately
   limited to dev, where a bad push costs you a re-run, not a UAT/PRD
   incident.
-- **Data governance.** The candidate SQL (and your schema) is sent to
-  Anthropic's API by default (`harness/llm_client.py`'s
-  `AnthropicLLMClient`). If company policy requires routing this through an
-  approved tenant (e.g. your own Azure OpenAI deployment) instead, swap in
-  a different `LLMClient` implementation — `suggest_fix()` is the only
-  method to implement.
+- **Choice of LLM, and data governance.** `--provider anthropic` (default)
+  or `--provider deepseek` (`harness/llm_client.py`'s `AnthropicLLMClient` /
+  `DeepSeekLLMClient`) — either way, the candidate SQL and your schema are
+  sent to that provider's API. DeepSeek is a China-based provider; sending
+  it your schema and stored-proc logic is an offshore data transfer, which
+  may matter for data-residency or export-control policy even when the SQL
+  itself contains no customer data. Confirm with whoever owns data
+  governance at your company before pointing this at real procedures, not
+  just examples. If policy requires routing through an approved tenant
+  instead (e.g. your own Azure OpenAI deployment), swap in a different
+  `LLMClient` implementation — `suggest_fix()` is the only method to
+  implement.
 
 Each iteration's checks, pass/fail, and the LLM's stated rationale for its
 next attempt are recorded in `reports/evolve_report.md`.
