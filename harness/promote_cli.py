@@ -48,6 +48,11 @@ def main(argv=None) -> int:
     except TransientError as exc:
         print(f"error: connection kept failing after retries: {exc}", file=sys.stderr)
         return 1
+    except Exception as exc:  # noqa: BLE001 - promote() re-raises a real deploy/exec failure
+        # (not a transient one) on purpose, since there's no LLM here to retry a fix with;
+        # this is the CLI boundary, so report it cleanly instead of a raw traceback
+        print(f"error: deploy/validate failed: {type(exc).__name__}: {exc}", file=sys.stderr)
+        return 1
 
     summary = write_reports(results, suite["suite"], suite["version"], args.output_dir)
     print(
