@@ -1,4 +1,5 @@
 pyodbc>=5.0
 PyYAML>=6.0
 pytest>=8.0
-anthropic>=0.40  # only needed to run harness/evolve_cli.py for real; checks/tests don't need it
+anthropic>=0.40  # only needed to run harness/evolve_cli.py --provider anthropic; checks/tests don't need it
+requests>=2.31   # only needed to run harness/evolve_cli.py --provider deepseek
