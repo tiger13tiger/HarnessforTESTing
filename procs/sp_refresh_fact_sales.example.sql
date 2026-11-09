@@ -1,3 +1,4 @@
+-- Trigger run: manual test of promote-dev-to-uat.yml on the dev branch.
 -- Example candidate procedure for the auto-fix loop (harness/evolve_cli.py).
 -- Deliberately contains a planted bug (double-counts revenue via a fan-out
 -- join) so running the example end to end demonstrates a failing first
