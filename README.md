@@ -10,7 +10,10 @@ It follows a `dev` → `uat` → `main` (prd) branch flow:
 2. **dev → uat** — fully automatic. `.github/workflows/promote-dev-to-uat.yml`
    fires on push to `dev`, deploys the proc to UAT, re-validates it there,
    and — only if that passes — merges `dev` into `uat` and pushes. No human
-   review in this step, by design.
+   review in this step, by design. If validation fails instead, a second job
+   in the same workflow sends the failure back to an LLM against `dev` and,
+   if it converges, pushes the fix — re-triggering this whole step. Capped
+   at 3 rounds before it stops and waits for a human.
 3. **uat → prd** — the one manual gate. A human (the test analyst) opens a
    PR from `uat` into `main`; `.github/workflows/uat-to-prd-gate.yml`
    re-validates against UAT as a required check, but merging stays a human
@@ -200,9 +203,7 @@ re-run a MockAgent against planted bugs before trusting a changed evaluator.
 deploys the already-converged procedure to UAT (via `harness/promote.py` —
 no LLM call here, just guardrail-check → deploy → validate), and if that
 passes, merges `dev` into `uat` and pushes. No human approves this step; the
-guardrail check and the UAT validation are what stand in for review. If
-validation fails, the workflow fails and `dev`/`uat` are left untouched —
-go back to stage 1.
+guardrail check and the UAT validation are what stand in for review.
 
 Run it by hand the same way the workflow does:
 
@@ -218,6 +219,31 @@ python -m harness.promote_cli \
 This workflow hardcodes one proc/suite as a worked example; with more than
 one stored procedure under test, replace that step with a loop over a
 manifest file mapping each `procs/*.sql` to its suite and EXEC statement.
+
+### When UAT rejects the candidate: automatic feedback to dev
+
+If the deploy/validate step above fails, that same workflow file's second
+job (`auto-fix-and-retry`, `if: failure()`, `needs: promote`) takes over
+instead of just leaving `dev`/`uat` untouched:
+
+1. Checks out `dev` and reads the last commit's message for a
+   `[auto-fix round N/3]` tag, to work out which round this is — there's no
+   shared state across runs, so the commit message is the only memory.
+2. Past round 3, it fails loudly (`::error::`) and stops. This is meant to
+   be looked at by a person, not retried again.
+3. Otherwise it calls `harness/evolve_cli.py --provider deepseek` against
+   `SYNAPSE_DEV_CONN_STR` (no `--push`) — the same fix loop described in
+   Stage 1 below, just run unattended in CI.
+4. If `evolve_cli.py` converges, the job commits the updated proc file with
+   the next round's tag and pushes to `dev` — which re-triggers this whole
+   workflow from the top, naturally retrying the dev → uat promotion. If
+   `evolve_cli.py` doesn't converge (exhausts its own internal attempts),
+   that step fails and the job stops there with no commit.
+
+This needs two GitHub Actions secrets on the repo: `SYNAPSE_DEV_CONN_STR`
+and `DEEPSEEK_API_KEY`. Secret *values* have to be set by a repo admin in
+GitHub's own Settings → Secrets UI — nothing here can set a secret's value
+from outside GitHub.
 
 ## Stage 3 — uat → prd: the one manual gate
 
