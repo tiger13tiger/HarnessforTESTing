@@ -14,14 +14,16 @@ version. This file is the short version, written as a checklist.
 
 ```
 dev  --(human or evolve_cli.py's LLM auto-fix loop)-->  dev
-dev  --(promote-dev-to-uat.yml: automatic, no human review)-->  uat
-                    |
-                    | on failure: auto-fix-and-retry job sends the
-                    | failure back to an LLM against dev, pushes a fix,
-                    | re-triggers from the top (max 3 rounds)
+dev  --(promote-dev-to-uat.yml "promote" job: automatic)-->  uat (merged)
+uat (merged)  --(promote-dev-to-uat.yml "validate-after-merge" job)-->  uat (confirmed ready)
+                    |                                    |
+                    | either job can fail --> auto-fix-dev.yml (reusable):
+                    | sends the failure back to an LLM against dev, pushes
+                    | a fix, re-triggers promote-dev-to-uat.yml from the
+                    | top (max 3 rounds total, shared by both jobs)
                     v
                    dev
-uat  --(a reviewed pull request, gated by uat-to-prd-gate.yml)-->  main
+uat (confirmed ready)  --(a reviewed pull request, gated by uat-to-prd-gate.yml)-->  main
 ```
 
 `main` represents "promoted to prd." It should only ever move forward
@@ -34,10 +36,14 @@ never a PR from `dev` or any other branch.
 - `uat`'s latest commit is at or behind `dev`'s.
 - No open PR has sat for more than ~3 days without action.
 - No open PR has a failing check that nobody's addressed.
-- `promote-dev-to-uat.yml` and `uat-to-prd-gate.yml` aren't failing
-  repeatedly for the same unaddressed reason (one expected failure while
-  actively debugging a real procedure/connection issue is normal; a
-  pattern of failures or a long-silent red run is not).
+- `promote-dev-to-uat.yml` (both its `promote` and `validate-after-merge`
+  jobs) and `uat-to-prd-gate.yml` aren't failing repeatedly for the same
+  unaddressed reason (one expected failure while actively debugging a real
+  procedure/connection issue is normal; a pattern of failures or a
+  long-silent red run is not).
+- A `promote` job passing doesn't by itself mean `uat` is ready — check
+  that `validate-after-merge` also passed on the same run before treating
+  `uat` as safe to open a PR from.
 
 ## Red flags — stop and look
 
@@ -53,15 +59,25 @@ never a PR from `dev` or any other branch.
   looked at the diff before it moved further (fine to land unreviewed on
   `dev` itself — that's the design — but it should get a human look before
   `uat -> main`).
-- The `auto-fix-and-retry` job hitting its 3-round cap (an `::error::` from
-  the "Determine round number" step in `promote-dev-to-uat.yml`, with no
-  further commits following it) and nobody looking at why the LLM couldn't
-  converge — this is the one case in the dev -> uat step that's supposed to
-  stop and wait for a human instead of resolving itself.
+- `auto-fix-dev.yml` hitting its 3-round cap (an `::error::` from its
+  "Determine round number" step, with no further commits following it) and
+  nobody looking at why the LLM couldn't converge — this is the one case in
+  the dev -> uat step that's supposed to stop and wait for a human instead
+  of resolving itself. The cap is shared: it can be reached from either
+  `promote` failing or `validate-after-merge` failing, so check which one
+  triggered it.
 - A `[auto-fix round N/3]` commit on `dev` whose diff doesn't actually
   change the procedure file (the job should have made no commit at all in
   that case) — would indicate the no-op guard in that job's push step
   isn't doing what it's supposed to.
+- `validate-after-merge` failing on a run where `promote` passed — the
+  candidate alone was fine, but something about the merge or the UAT
+  database's state right after wasn't. Worth a closer look even once the
+  auto-fix loop resolves it, since it's not a case the pre-merge check was
+  ever designed to catch.
+- A `uat -> main` PR opened or merged without that PR's run of
+  `uat-to-prd-gate.yml` showing a passing `validate-after-merge` on the
+  commit it's built from.
 
 ## Last known-good state
 
