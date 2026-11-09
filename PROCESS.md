@@ -6,8 +6,9 @@ file and compares reality against it — if the process ever deliberately
 changes, update this file first; the check follows it, not the other way
 around.
 
-See README.md's "Stage 1/2/3" sections for the full mechanics of each step.
-This file is the short version, written as a checklist.
+See README.md's "Stage 1/2/3" sections for the full mechanics of each step,
+and [`docs/architecture.html`](docs/architecture.html) for the diagrammed
+version. This file is the short version, written as a checklist.
 
 ## The intended flow
 
