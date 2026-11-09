@@ -21,6 +21,9 @@ Safety by construction, not by convention:
   problems and point the model at different kinds of fixes;
 - the LLM call itself is retried on transient failure and never allowed to
   crash the loop -- an exhausted LLM is a failed iteration, not a stack trace;
+- so is opening the connection: a transient DB failure (login timeout,
+  deadlock, throttling) is retried with backoff before giving up, instead of
+  propagating as an unhandled exception;
 - this loop never writes to git, never opens a PR and never deploys outside
   the sandbox schema -- it only returns the final SQL and a report for a
   human to review and commit.
@@ -28,6 +31,7 @@ Safety by construction, not by convention:
 import time
 from dataclasses import dataclass, field
 
+from harness.connector import TransientError, open_transaction_with_retries
 from harness.guardrails import GuardrailViolation, check_candidate_sql
 from harness.report import gate_failed
 from harness.runner import run_suite
@@ -37,7 +41,7 @@ from harness.runner import run_suite
 class Iteration:
     attempt: int
     candidate_sql: str
-    stage: str = "validate"  # "guardrail" | "deploy" | "exec" | "validate" | "llm"
+    stage: str = "validate"  # "guardrail" | "connect" | "deploy" | "exec" | "validate" | "llm"
     results: list = field(default_factory=list)
     gate_failed: bool = True
     rationale: str = ""
@@ -94,7 +98,12 @@ def evolve(
             history.append(Iteration(attempt, candidate_sql, stage="guardrail", error=str(exc)))
             break  # a guardrail violation means stop, not retry -- nothing was deployed
 
-        txn = connector.transaction()
+        try:
+            txn = open_transaction_with_retries(connector)
+        except TransientError as exc:
+            history.append(Iteration(attempt, candidate_sql, stage="connect", error=str(exc)))
+            break  # an infra connection failure isn't something an LLM SQL fix would resolve
+
         try:
             stage, results, error = _run_one_attempt(txn, candidate_sql, exec_statement, validation_suite)
 

@@ -1,20 +1,24 @@
 suite: "fact_sales_golden"
 version: "v1"
-connection_env: "SYNAPSE_SANDBOX_CONN_STR"
+connection_env: "SYNAPSE_UAT_CONN_STR"
 
 checks:
   - id: "fact_sales_matches_pivot_table"
     category: "business_logic"
-    description: "sandbox.fact_sales 按品类汇总的收入和笔数必须与你在pivot table里核对过的数字一致"
+    description: "dbo.fact_sales 按品类汇总的收入和笔数必须与你在pivot table里核对过的数字一致"
     severity: "blocker"
     type: "golden_rows"
     params:
-      sql: "SELECT product_category, revenue, txn_count FROM sandbox.fact_sales"
+      sql: "SELECT product_category, revenue, txn_count FROM dbo.fact_sales"
       key_columns: ["product_category"]
       measures:
-        revenue: {tolerance_abs: 50}
+        revenue: {tolerance_abs: 1}
         txn_count: {tolerance_abs: 0}
       expected:
-        - {product_category: "Electronics", revenue: 582340.12, txn_count: 1820}
-        - {product_category: "Groceries", revenue: 128900.55, txn_count: 940}
-        - {product_category: "Apparel", revenue: 94210.30, txn_count: 610}
+        # Computed by infra/generate_seed_data.py straight from infra/seed_schema.sql's
+        # 1000 generated rows -- not hand-picked. Regenerate both together.
+        - {product_category: "Electronics", revenue: 97125.44, txn_count: 194}
+        - {product_category: "Groceries", revenue: 100209.65, txn_count: 199}
+        - {product_category: "Apparel", revenue: 104454.39, txn_count: 209}
+        - {product_category: "Home", revenue: 101018.56, txn_count: 205}
+        - {product_category: "Toys", revenue: 94108.15, txn_count: 193}

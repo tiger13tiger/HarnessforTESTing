@@ -28,7 +28,10 @@ def run(connector, params: dict):
         for key, expected_val in expected.items():
             actual_val = row.get(key)
             results[key] = {"actual": actual_val, "expected": expected_val}
-            if actual_val is None or abs(actual_val - expected_val) > tolerance_abs:
+            # actual_val can be a decimal.Decimal (SQL Server DECIMAL columns, via pyodbc);
+            # expected_val is whatever YAML parsed (usually float) -- Decimal - float raises
+            # TypeError, so compare as float
+            if actual_val is None or abs(float(actual_val) - float(expected_val)) > tolerance_abs:
                 failures.append(key)
 
     if failures:
