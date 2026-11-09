@@ -12,9 +12,11 @@ checks:
       sql: "SELECT product_category, revenue, txn_count FROM dbo.fact_sales"
       key_columns: ["product_category"]
       measures:
-        revenue: {tolerance_abs: 50}
+        revenue: {tolerance_abs: 1}
         txn_count: {tolerance_abs: 0}
       expected:
-        - {product_category: "Electronics", revenue: 582340.12, txn_count: 1820}
-        - {product_category: "Groceries", revenue: 128900.55, txn_count: 940}
-        - {product_category: "Apparel", revenue: 94210.30, txn_count: 610}
+        # Matches infra/seed_schema.sql exactly -- hand-computable from that
+        # seed data, the same way you'd check these in a pivot table.
+        - {product_category: "Electronics", revenue: 3000.00, txn_count: 3}
+        - {product_category: "Groceries", revenue: 500.00, txn_count: 2}
+        - {product_category: "Apparel", revenue: 250.00, txn_count: 2}
