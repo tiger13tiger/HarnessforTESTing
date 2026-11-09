@@ -67,6 +67,7 @@ def main(argv=None) -> int:
     parser.add_argument("--allowed-schema", required=True, help="schema the candidate procedure must live in")
     parser.add_argument("--conn-env", default="SYNAPSE_DEV_CONN_STR")
     parser.add_argument("--max-iterations", type=int, default=5)
+    parser.add_argument("--llm-retries", type=int, default=2, help="retries on a failed LLM call (network/rate-limit), separate from --max-iterations")
     parser.add_argument("--output-dir", default="reports")
     parser.add_argument("--output-proc", default=None, help="where to write the final passing proc SQL (default: overwrite --proc)")
     parser.add_argument("--provider", choices=["anthropic", "deepseek"], default="anthropic", help="which LLM to call for fixes")
@@ -94,6 +95,7 @@ def main(argv=None) -> int:
         allowed_schema=args.allowed_schema,
         context=f"Candidate procedure file: {args.proc}",
         max_iterations=args.max_iterations,
+        llm_retries=args.llm_retries,
     )
 
     write_evolve_report(success, history, args.output_dir)

@@ -69,6 +69,16 @@ def write_reports(results, suite_name: str, suite_version: str, output_dir) -> d
     return summary
 
 
+def _closest_iteration(history):
+    """The validate-stage attempt with the fewest non-pass checks, as a consolation
+    pointer when every attempt failed -- "closest" by check count, not a guarantee
+    it was semantically closer to correct."""
+    candidates = [it for it in history if it.stage == "validate" and it.results]
+    if not candidates:
+        return None
+    return min(candidates, key=lambda it: sum(1 for r in it.results if r.status != "pass"))
+
+
 def write_evolve_report(success: bool, history, output_dir) -> dict:
     """Writes evolve_report.md / evolve_summary.json for the auto-fix loop in harness/evolve.py."""
     output_dir = Path(output_dir)
@@ -82,20 +92,42 @@ def write_evolve_report(success: bool, history, output_dir) -> dict:
         "",
     ]
     for it in history:
-        lines.append(f"## Attempt {it.attempt}")
-        if it.guardrail_error:
-            lines.append(f"- **blocked by guardrail (never deployed):** {it.guardrail_error}")
+        lines.append(f"## Attempt {it.attempt} (stage: {it.stage})")
+        if it.stage in ("guardrail", "deploy", "exec", "llm"):
+            label = {
+                "guardrail": "blocked by guardrail (never deployed)",
+                "deploy": "deploy failed, rolled back",
+                "exec": "EXEC failed, rolled back",
+                "llm": "could not get a fix from the LLM",
+            }[it.stage]
+            lines.append(f"- **{label}:** {it.error}")
             lines.append("")
             continue
         lines.append(f"- gate: {'FAIL' if it.gate_failed else 'PASS'}")
+        lines.append(f"- {'rolled back (candidate discarded)' if it.gate_failed else 'committed'}")
         for r in it.results:
             lines.append(f"  - `{r.id}` ({r.category}, {r.severity}): **{r.status}** — {r.message}")
         if it.rationale:
             lines += ["", "<details><summary>LLM rationale for the next candidate</summary>", "", it.rationale, "", "</details>"]
         lines.append("")
 
+    closest = _closest_iteration(history) if not success else None
+    if closest is not None:
+        failing_count = sum(1 for r in closest.results if r.status != "pass")
+        lines += [
+            "## Closest attempt",
+            "",
+            f"Attempt {closest.attempt} had the fewest failing checks ({failing_count}/{len(closest.results)}). "
+            "Not a guarantee it was semantically closest to correct -- just the smallest failure count.",
+            "",
+        ]
+
     (output_dir / "evolve_report.md").write_text("\n".join(lines), encoding="utf-8")
 
-    summary = {"success": success, "iterations": len(history)}
+    summary = {
+        "success": success,
+        "iterations": len(history),
+        "closest_attempt": closest.attempt if closest is not None else None,
+    }
     (output_dir / "evolve_summary.json").write_text(json.dumps(summary, indent=2, ensure_ascii=False), encoding="utf-8")
     return summary

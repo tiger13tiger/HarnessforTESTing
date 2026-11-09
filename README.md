@@ -131,6 +131,22 @@ python -m harness.evolve_cli \
   security boundary — the real isolation is that `--conn-env` should point
   at your DEV environment, physically separate from UAT/PRD, with
   least-privilege credentials.
+- **Every attempt runs in one transaction, rolled back on failure.**
+  Deploy → `EXEC` → validate all happen on the same held-open connection
+  (`harness/connector.py`'s `SynapseTransaction`), so the validation
+  queries see that attempt's own uncommitted changes. A failing attempt is
+  rolled back as a unit before the LLM is asked for a fix — if the
+  procedure `TRUNCATE`s and re-`INSERT`s a table, a candidate that doesn't
+  pass never leaves that table changed. Only a passing attempt commits.
+- **Failures are tagged by stage, not lumped together.** A candidate can
+  fail to deploy (bad DDL), fail to `EXEC` (runtime error), or deploy fine
+  but produce the wrong data (`stage` is `deploy`/`exec`/`validate` on each
+  `Iteration` in `reports/evolve_report.md`). The LLM gets told which one
+  happened, instead of one undifferentiated error blob.
+- **A flaky LLM call can't crash the loop.** `suggest_fix()` is retried
+  with backoff on failure (network blip, rate limit); if it's still
+  failing after `--llm-retries` (not just this one call), that's recorded
+  as a failed iteration with `stage: llm`, not an unhandled exception.
 - **`--push` is opt-in and scoped to dev.** Without it, nothing is
   committed — the final SQL and iteration report are just local files for
   you to review. With it, the loop commits and pushes the final passing
