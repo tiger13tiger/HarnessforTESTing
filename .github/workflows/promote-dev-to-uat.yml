@@ -14,6 +14,15 @@ name: Promote dev -> uat (automatic)
 # example. With more than one stored procedure under test, replace the
 # "Deploy to UAT and validate" step with a loop over a manifest file that
 # maps each procs/*.sql to its suite and EXEC statement.
+#
+# Two things can fail here, and both retry the same way: a rejected
+# candidate before it ever reaches uat ("promote"), or a re-check of the
+# actually-merged uat state right after the merge ("validate-after-merge").
+# Either failure calls auto-fix-dev.yml (a reusable workflow) to send the
+# problem back to an LLM against dev and push a fix, sharing one 3-round
+# cap between them. A pass on validate-after-merge means uat is confirmed
+# good; a human still opens the uat -> main PR and merges it whenever
+# they're ready -- that part stays manual.
 
 on:
   push:
@@ -78,22 +87,27 @@ jobs:
           git merge --no-ff origin/dev -m "Auto-merge dev into uat: validated against UAT"
           git push origin uat
 
-  # Runs only when the promote job above failed (UAT rejected the candidate).
-  # Sends the failure back to an LLM in harness/evolve.py against DEV, and if
-  # it converges, pushes the fix to dev -- which re-triggers this whole
-  # workflow fresh, naturally retrying the dev -> uat promotion. Capped at 3
-  # outer rounds (tracked via a "[auto-fix round N/3]" tag in the commit
-  # message, since each round is a separate workflow run with no shared
-  # state) so a procedure the LLM can't fix doesn't loop forever -- it stops
-  # and waits for a human instead.
+  # Runs only when the promote job above failed (UAT rejected the candidate
+  # before it ever reached uat). See auto-fix-dev.yml for what this does.
   auto-fix-and-retry:
     needs: promote
     if: failure()
+    uses: ./.github/workflows/auto-fix-dev.yml
+    secrets: inherit
+
+  # Runs only when promote succeeded, i.e. only after dev was actually
+  # merged into uat. Re-deploys and re-validates against UAT using uat's own
+  # branch state -- not just the dev candidate promote already checked a
+  # moment ago -- so a merge-specific surprise (a conflict resolved oddly, a
+  # database that drifted between the two checks) still gets caught before a
+  # human ever opens a uat -> main PR.
+  validate-after-merge:
+    needs: promote
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: dev
+          ref: uat
           fetch-depth: 0
 
       - uses: actions/setup-python@v5
@@ -110,51 +124,33 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt
 
-      - name: Determine round number
-        id: round
-        run: |
-          LAST_SUBJECT="$(git log -1 --pretty=%s)"
-          LAST_ROUND="$(echo "$LAST_SUBJECT" | grep -oP '\[auto-fix round \K[0-9]+(?=/3\])' || true)"
-          if [ -z "$LAST_ROUND" ]; then
-            NEXT_ROUND=1
-          else
-            NEXT_ROUND=$((LAST_ROUND + 1))
-          fi
-          if [ "$NEXT_ROUND" -gt 3 ]; then
-            echo "::error::Auto-fix cap reached (3/3) without a passing UAT run. Stopping for human review."
-            exit 1
-          fi
-          echo "next_round=$NEXT_ROUND" >> "$GITHUB_OUTPUT"
-
-      - name: Ask the LLM to fix the procedure against DEV
+      - name: Re-validate the merged uat branch against UAT
         env:
-          SYNAPSE_DEV_CONN_STR: ${{ secrets.SYNAPSE_DEV_CONN_STR }}
-          DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
+          SYNAPSE_UAT_CONN_STR: ${{ secrets.SYNAPSE_UAT_CONN_STR }}
         run: |
-          python -m harness.evolve_cli \
+          python -m harness.promote_cli \
             --proc procs/sp_refresh_fact_sales.example.sql \
             --exec-statement "EXEC dbo.sp_refresh_fact_sales" \
             --suite tests/golden_fact_sales.example.yaml \
             --allowed-schema dbo \
-            --conn-env SYNAPSE_DEV_CONN_STR \
-            --provider deepseek
+            --conn-env SYNAPSE_UAT_CONN_STR
 
       - name: Upload report
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: auto-fix-report
+          name: uat-post-merge-validation-report
           path: reports/
           if-no-files-found: ignore
 
-      - name: Commit and push the fix back to dev
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          if git diff --quiet -- procs/sp_refresh_fact_sales.example.sql; then
-            echo "No change produced by the LLM; nothing to push."
-            exit 0
-          fi
-          git add procs/sp_refresh_fact_sales.example.sql
-          git commit -m "Auto-fix after UAT rejection [auto-fix round ${{ steps.round.outputs.next_round }}/3]"
-          git push origin HEAD:dev
+  # Runs only when validate-after-merge above failed. Same shared retry as
+  # auto-fix-and-retry above -- see auto-fix-dev.yml -- just triggered from
+  # the post-merge check instead of the pre-merge one. Dev keeps iterating;
+  # a converged fix pushes to dev and re-triggers this workflow, which
+  # re-merges into uat on its next clean pass. uat is never reverted here --
+  # the next successful merge simply supersedes it.
+  auto-fix-and-retry-from-uat:
+    needs: validate-after-merge
+    if: failure()
+    uses: ./.github/workflows/auto-fix-dev.yml
+    secrets: inherit
