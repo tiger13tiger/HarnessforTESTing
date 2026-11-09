@@ -14,6 +14,15 @@ name: Promote dev -> uat (automatic)
 # example. With more than one stored procedure under test, replace the
 # "Deploy to UAT and validate" step with a loop over a manifest file that
 # maps each procs/*.sql to its suite and EXEC statement.
+#
+# Two things can fail here, and both retry the same way: a rejected
+# candidate before it ever reaches uat ("promote"), or a re-check of the
+# actually-merged uat state right after the merge ("validate-after-merge").
+# Either failure calls auto-fix-dev.yml (a reusable workflow) to send the
+# problem back to an LLM against dev and push a fix, sharing one 3-round
+# cap between them. A pass on validate-after-merge means uat is confirmed
+# good; a human still opens the uat -> main PR and merges it whenever
+# they're ready -- that part stays manual.
 
 on:
   push:
@@ -77,3 +86,71 @@ jobs:
           git checkout uat
           git merge --no-ff origin/dev -m "Auto-merge dev into uat: validated against UAT"
           git push origin uat
+
+  # Runs only when the promote job above failed (UAT rejected the candidate
+  # before it ever reached uat). See auto-fix-dev.yml for what this does.
+  auto-fix-and-retry:
+    needs: promote
+    if: failure()
+    uses: ./.github/workflows/auto-fix-dev.yml
+    secrets: inherit
+
+  # Runs only when promote succeeded, i.e. only after dev was actually
+  # merged into uat. Re-deploys and re-validates against UAT using uat's own
+  # branch state -- not just the dev candidate promote already checked a
+  # moment ago -- so a merge-specific surprise (a conflict resolved oddly, a
+  # database that drifted between the two checks) still gets caught before a
+  # human ever opens a uat -> main PR.
+  validate-after-merge:
+    needs: promote
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: uat
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install the Microsoft ODBC driver for SQL Server
+        run: |
+          curl -sSL -O https://packages.microsoft.com/config/ubuntu/22.04/packages-microsoft-prod.deb
+          sudo dpkg -i packages-microsoft-prod.deb
+          sudo apt-get update
+          sudo ACCEPT_EULA=Y apt-get install -y msodbcsql18
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Re-validate the merged uat branch against UAT
+        env:
+          SYNAPSE_UAT_CONN_STR: ${{ secrets.SYNAPSE_UAT_CONN_STR }}
+        run: |
+          python -m harness.promote_cli \
+            --proc procs/sp_refresh_fact_sales.example.sql \
+            --exec-statement "EXEC dbo.sp_refresh_fact_sales" \
+            --suite tests/golden_fact_sales.example.yaml \
+            --allowed-schema dbo \
+            --conn-env SYNAPSE_UAT_CONN_STR
+
+      - name: Upload report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: uat-post-merge-validation-report
+          path: reports/
+          if-no-files-found: ignore
+
+  # Runs only when validate-after-merge above failed. Same shared retry as
+  # auto-fix-and-retry above -- see auto-fix-dev.yml -- just triggered from
+  # the post-merge check instead of the pre-merge one. Dev keeps iterating;
+  # a converged fix pushes to dev and re-triggers this workflow, which
+  # re-merges into uat on its next clean pass. uat is never reverted here --
+  # the next successful merge simply supersedes it.
+  auto-fix-and-retry-from-uat:
+    needs: validate-after-merge
+    if: failure()
+    uses: ./.github/workflows/auto-fix-dev.yml
+    secrets: inherit

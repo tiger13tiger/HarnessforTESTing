@@ -10,7 +10,12 @@ It follows a `dev` → `uat` → `main` (prd) branch flow:
 2. **dev → uat** — fully automatic. `.github/workflows/promote-dev-to-uat.yml`
    fires on push to `dev`, deploys the proc to UAT, re-validates it there,
    and — only if that passes — merges `dev` into `uat` and pushes. No human
-   review in this step, by design.
+   review in this step, by design. Then it re-validates again, this time
+   the actual merged `uat` state, not just the candidate. If either check
+   fails, the failure goes back to an LLM against `dev`; a converged fix
+   pushes and re-triggers this whole step. Capped at 3 rounds total (shared
+   between both checks) before it stops and waits for a human. Only a clean
+   post-merge validation marks `uat` ready for stage 3.
 3. **uat → prd** — the one manual gate. A human (the test analyst) opens a
    PR from `uat` into `main`; `.github/workflows/uat-to-prd-gate.yml`
    re-validates against UAT as a required check, but merging stays a human
@@ -200,9 +205,7 @@ re-run a MockAgent against planted bugs before trusting a changed evaluator.
 deploys the already-converged procedure to UAT (via `harness/promote.py` —
 no LLM call here, just guardrail-check → deploy → validate), and if that
 passes, merges `dev` into `uat` and pushes. No human approves this step; the
-guardrail check and the UAT validation are what stand in for review. If
-validation fails, the workflow fails and `dev`/`uat` are left untouched —
-go back to stage 1.
+guardrail check and the UAT validation are what stand in for review.
 
 Run it by hand the same way the workflow does:
 
@@ -218,6 +221,58 @@ python -m harness.promote_cli \
 This workflow hardcodes one proc/suite as a worked example; with more than
 one stored procedure under test, replace that step with a loop over a
 manifest file mapping each `procs/*.sql` to its suite and EXEC statement.
+
+### After the merge: re-validate what actually landed in uat
+
+Merging doesn't end the workflow. A third job, `validate-after-merge`
+(`needs: promote`), checks out `uat` itself — not the `dev` candidate
+`promote` already checked a moment ago — and re-runs the same
+deploy-and-validate against UAT. This exists because the merge step is the
+one place a surprise could sneak in that the pre-merge check couldn't see:
+an oddly-resolved conflict, or a UAT database that changed between the two
+checks. Only a clean pass here means `uat` is actually ready — that's the
+signal to open the Stage 3 pull request, not just a successful `promote`.
+
+### When UAT rejects the candidate: automatic feedback to dev
+
+Two different steps can fail — `promote` (the candidate, before it ever
+reaches `uat`) or `validate-after-merge` (the merged state, after). Either
+one calls the same reusable workflow, `.github/workflows/auto-fix-dev.yml`,
+instead of just leaving things broken:
+
+1. Checks out `dev` and reads the last commit's message for a
+   `[auto-fix round N/3]` tag, to work out which round this is — there's no
+   shared state across runs, so the commit message is the only memory. Both
+   failure points share this one counter: it's one 3-round budget total,
+   not three rounds each.
+2. Past round 3, it fails loudly (`::error::`) and stops. This is meant to
+   be looked at by a person, not retried again.
+3. Otherwise it calls `harness/evolve_cli.py --provider deepseek` against
+   `SYNAPSE_DEV_CONN_STR` (no `--push`) — the same fix loop described in
+   Stage 1 below, just run unattended in CI.
+4. If `evolve_cli.py` converges, the job commits the updated proc file with
+   the next round's tag and pushes to `dev` — which re-triggers
+   `promote-dev-to-uat.yml` from the top, naturally retrying the whole dev
+   → uat cycle (including a fresh `validate-after-merge` once it re-merges).
+   If `evolve_cli.py` doesn't converge (exhausts its own internal
+   attempts), that step fails and the job stops there with no commit.
+   `uat` is never reverted when this happens — the next successful merge
+   simply supersedes it, same as any other `TRUNCATE`/`INSERT` refresh.
+
+This needs three GitHub Actions secrets on the repo: `SYNAPSE_DEV_CONN_STR`,
+`DEEPSEEK_API_KEY`, and `GH_PAT`. Secret *values* have to be set by a repo
+admin in GitHub's own Settings → Secrets UI — nothing here can set a
+secret's value from outside GitHub.
+
+`GH_PAT` needs its own explanation: it's a Personal Access Token (classic,
+`repo` scope, or fine-grained with "Contents: Read and write" on this
+repo), used only for the final `git push` back to `dev` in
+`auto-fix-dev.yml`. GitHub Actions deliberately won't let a push
+authenticated with the default `GITHUB_TOKEN` trigger another workflow run
+— it's an anti-recursion guard — so without a real PAT there, the push to
+`dev` would succeed but silently never re-trigger
+`promote-dev-to-uat.yml`, and the retry loop would just stop with no error
+and no second attempt.
 
 ## Stage 3 — uat → prd: the one manual gate
 

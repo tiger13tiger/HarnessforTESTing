@@ -208,12 +208,14 @@ footer {
     <div class="legend">
       <span><span class="swatch" style="background:var(--accent)"></span>automated</span>
       <span><span class="swatch" style="background:var(--highlight)"></span>human-reviewed</span>
+      <span><span class="swatch" style="background:var(--bad)"></span>auto-retry on failure</span>
+      <span><span class="swatch" style="background:var(--good)"></span>validated, ready for a human</span>
       <span><span class="swatch" style="background:var(--fg-muted);opacity:.5"></span>out of scope</span>
     </div>
 
     <figure>
       <div class="diagram-frame">
-        <svg viewBox="0 0 1500 330" role="img" aria-label="Pipeline diagram: a dev Azure SQL database and dev git branch feed into promote-dev-to-uat.yml, which deploys and validates against the UAT database and auto-merges dev into uat with no human review. The uat branch then goes through a pull request gated by uat-to-prd-gate.yml and a human merge into main, which represents prd. Actual deployment to the real production Synapse warehouse is a separate, unautomated process.">
+        <svg viewBox="0 0 1500 440" role="img" aria-label="Pipeline diagram: a dev Azure SQL database and dev git branch feed into promote-dev-to-uat.yml, which deploys and validates against the UAT database. On a clean pass it merges dev into uat with no human review, then a second job re-validates the actual merged uat state. On either validation failing, a shared reusable workflow sends the failure back to an LLM against the dev database; if that converges it pushes a fix back to the dev branch, re-triggering the whole workflow, capped at three rounds total across both failure points before it stops for a human. Only when the post-merge validation passes is uat considered ready: a human then opens a pull request into main, gated by uat-to-prd-gate.yml, and merges it manually. Actual deployment to the real production Synapse warehouse is a separate, unautomated process.">
           <defs>
             <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
               <path d="M0,0 L10,5 L0,10 Z" fill="currentColor"/>
@@ -223,6 +225,12 @@ footer {
             </marker>
             <marker id="arrowMuted" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
               <path d="M0,0 L10,5 L0,10 Z" fill="var(--fg-muted)"/>
+            </marker>
+            <marker id="arrowBad" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+              <path d="M0,0 L10,5 L0,10 Z" fill="var(--bad)"/>
+            </marker>
+            <marker id="arrowGood1" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+              <path d="M0,0 L10,5 L0,10 Z" fill="var(--good)"/>
             </marker>
           </defs>
 
@@ -261,6 +269,10 @@ footer {
           <line x1="460" y1="195" x2="630" y2="195" stroke="var(--accent)" stroke-width="1.3" marker-end="url(#arrow)"/>
           <text x="545" y="210" text-anchor="middle" font-size="10" fill="var(--accent)">2 — merge dev → uat</text>
 
+          <!-- gate1 fail: auto-fix-and-retry job loops back to dev -->
+          <path d="M 400 230 L 400 302 Q 400 314 388 314 L 172 314 Q 160 314 160 302 L 160 230" fill="none" stroke="var(--bad)" stroke-width="1.2" stroke-dasharray="4 3" marker-end="url(#arrowBad)"/>
+          <text x="280" y="330" text-anchor="middle" font-size="10" fill="var(--bad)">3 — on fail: LLM auto-fix in dev, re-triggers (≤3 rounds, then stops for a human)</text>
+
           <!-- UAT zone -->
           <rect x="630" y="20" width="220" height="50" rx="4" fill="var(--surface-2)" stroke="var(--border)"/>
           <text x="740" y="40" text-anchor="middle" font-family="var(--font-mono)" font-size="11" fill="var(--fg-muted)">AZURE SQL</text>
@@ -288,6 +300,19 @@ footer {
           <line x1="1096" y1="190" x2="1225" y2="190" stroke="var(--highlight)" stroke-width="1.3" marker-end="url(#arrowHi)"/>
           <text x="1160" y="178" text-anchor="middle" font-size="10" fill="var(--highlight)">merge</text>
 
+          <!-- validate-after-merge: re-checks the actual merged uat state -->
+          <line x1="740" y1="215" x2="740" y2="244" stroke="currentColor" stroke-width="1.2" marker-end="url(#arrow)"/>
+          <rect x="630" y="246" width="220" height="56" rx="4" fill="var(--surface)" stroke="var(--bad)" stroke-width="1.3"/>
+          <text x="740" y="266" text-anchor="middle" font-family="var(--font-mono)" font-size="11" fill="var(--bad)">validate-after-merge</text>
+          <text x="740" y="282" text-anchor="middle" font-size="9.5" fill="var(--fg-muted)">re-checks the merged</text>
+          <text x="740" y="295" text-anchor="middle" font-size="9.5" fill="var(--fg-muted)">uat state, not just the candidate</text>
+
+          <path d="M 850 262 Q 950 215 988 198" fill="none" stroke="var(--good)" stroke-width="1.1" stroke-dasharray="3 3" marker-end="url(#arrowGood1)"/>
+          <text x="930" y="240" text-anchor="middle" font-size="10" fill="var(--good)">4 — pass: uat confirmed ready</text>
+
+          <path d="M 740 302 L 740 400 Q 740 412 728 412 L 232 412 Q 220 412 220 400 L 220 232" fill="none" stroke="var(--bad)" stroke-width="1.2" stroke-dasharray="4 3" marker-end="url(#arrowBad)"/>
+          <text x="480" y="428" text-anchor="middle" font-size="10" fill="var(--bad)">5 — on fail: same auto-fix loop, back to dev (shares the ≤3-round budget with loop 3)</text>
+
           <!-- MAIN zone -->
           <rect x="1225" y="165" width="220" height="50" rx="4" fill="var(--surface)" stroke="var(--highlight)" stroke-width="1.3"/>
           <text x="1335" y="185" text-anchor="middle" font-family="var(--font-mono)" font-size="11" fill="var(--fg-muted)">BRANCH</text>
@@ -299,11 +324,13 @@ footer {
           <text x="1335" y="296" text-anchor="middle" font-size="10.5" opacity="0.75" fill="var(--fg-muted)">deploy — not automated</text>
         </svg>
       </div>
-      <figcaption>Fig. 1 — <code>dev</code> and <code>uat</code> each sit next to their own Azure SQL database. Gate 1 is a GitHub Action with no human in the loop. Gate 2 is a pull request a person has to merge. <code>main</code> stands for "promoted to prd," but nothing here actually deploys to the real Synapse warehouse — that step is still the existing release process.</figcaption>
+      <figcaption>Fig. 1 — <code>dev</code> and <code>uat</code> each sit next to their own Azure SQL database. Gate 1 is a GitHub Action with no human in the loop, and it doesn't stop at a clean merge: a second job re-validates the <em>actual merged</em> <code>uat</code> state right after. Either validation failing — the candidate before merge, or the merged state after — calls the same reusable auto-fix workflow, which sends the problem back to an LLM against <code>dev</code> and pushes a fix, re-triggering Gate 1 fresh. Both failure points share one 3-round budget, win or lose. Only a clean post-merge validation marks <code>uat</code> ready — a human still has to open and merge the Gate 2 pull request. <code>main</code> stands for "promoted to prd," but nothing here actually deploys to the real Synapse warehouse — that step is still the existing release process.</figcaption>
     </figure>
 
     <ul class="explain">
-      <li class="auto"><strong>promote-dev-to-uat.yml</strong>Fires on every push to <code>dev</code> that touches <code>procs/**.sql</code> or <code>tests/**.yaml</code>. Deploys the candidate to UAT inside one transaction, runs the validation suite, and — only on a clean pass — merges <code>dev</code> into <code>uat</code> and pushes. A failed deploy rolls back; nothing in UAT changes.</li>
+      <li class="auto"><strong>promote-dev-to-uat.yml: promote job</strong>Fires on every push to <code>dev</code> that touches <code>procs/**.sql</code> or <code>tests/**.yaml</code>. Deploys the candidate to UAT inside one transaction, runs the validation suite, and — only on a clean pass — merges <code>dev</code> into <code>uat</code> and pushes. A failed deploy rolls back; nothing in UAT changes.</li>
+      <li class="bad"><strong>promote-dev-to-uat.yml: validate-after-merge job</strong>Runs only once <code>promote</code> succeeds, i.e. only after the merge actually landed. Re-deploys and re-validates against UAT using <code>uat</code>'s own branch state — catches a merge-specific surprise (an odd conflict resolution, a database that drifted between the two checks) that validating the candidate alone, a moment earlier, couldn't see.</li>
+      <li class="bad"><strong>auto-fix-dev.yml (reusable)</strong>Called by whichever of the two jobs above failed. Calls <code>harness/evolve_cli.py --provider deepseek</code> against the <code>dev</code> database (the same fix loop as Fig. 2), and if it converges, commits the result back to <code>dev</code> with a <code>[auto-fix round N/3]</code> tag — which re-triggers <code>promote-dev-to-uat.yml</code> from the top. The tag is how each run (a fresh job, no shared state) knows which round it's on, shared across both callers; past round 3 it stops and leaves the failure for a human. This push uses a PAT, not the default token — a default-token push can't re-trigger a workflow, which would otherwise make this whole loop silently inert.</li>
       <li class="human"><strong>uat-to-prd-gate.yml</strong>Fires on a pull request into <code>main</code>. Re-validates against UAT as a required check so the reviewer sees current pass/fail before deciding — but merging is always a person's click, never automatic.</li>
       <li class="bad"><strong>Where this stops</strong>Nothing past <code>main</code> is built yet. Getting a merged change into the actual production Synapse warehouse is still whatever your team's release process already is.</li>
     </ul>
@@ -486,7 +513,8 @@ footer {
   cli.py · evolve_cli.py · promote_cli.py · benchmark_cli.py
 
 <span class="dir">.github/workflows/</span>
-  promote-dev-to-uat.yml    <span class="comment"># Gate 1 — automatic</span>
+  promote-dev-to-uat.yml    <span class="comment"># Gate 1 — automatic (promote + validate-after-merge jobs)</span>
+  auto-fix-dev.yml          <span class="comment"># reusable — the shared LLM retry, called by both failure points above</span>
   uat-to-prd-gate.yml       <span class="comment"># Gate 2 — human-reviewed</span>
 
 <span class="dir">procs/</span>  <span class="comment"># candidate stored procedures (currently: one example)</span>
