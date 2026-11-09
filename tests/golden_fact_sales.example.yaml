@@ -1,15 +1,15 @@
 suite: "fact_sales_golden"
 version: "v1"
-connection_env: "SYNAPSE_SANDBOX_CONN_STR"
+connection_env: "SYNAPSE_UAT_CONN_STR"
 
 checks:
   - id: "fact_sales_matches_pivot_table"
     category: "business_logic"
-    description: "sandbox.fact_sales 按品类汇总的收入和笔数必须与你在pivot table里核对过的数字一致"
+    description: "dbo.fact_sales 按品类汇总的收入和笔数必须与你在pivot table里核对过的数字一致"
     severity: "blocker"
     type: "golden_rows"
     params:
-      sql: "SELECT product_category, revenue, txn_count FROM sandbox.fact_sales"
+      sql: "SELECT product_category, revenue, txn_count FROM dbo.fact_sales"
       key_columns: ["product_category"]
       measures:
         revenue: {tolerance_abs: 50}
