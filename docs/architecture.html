@@ -208,12 +208,13 @@ footer {
     <div class="legend">
       <span><span class="swatch" style="background:var(--accent)"></span>automated</span>
       <span><span class="swatch" style="background:var(--highlight)"></span>human-reviewed</span>
+      <span><span class="swatch" style="background:var(--bad)"></span>auto-retry on failure</span>
       <span><span class="swatch" style="background:var(--fg-muted);opacity:.5"></span>out of scope</span>
     </div>
 
     <figure>
       <div class="diagram-frame">
-        <svg viewBox="0 0 1500 330" role="img" aria-label="Pipeline diagram: a dev Azure SQL database and dev git branch feed into promote-dev-to-uat.yml, which deploys and validates against the UAT database and auto-merges dev into uat with no human review. The uat branch then goes through a pull request gated by uat-to-prd-gate.yml and a human merge into main, which represents prd. Actual deployment to the real production Synapse warehouse is a separate, unautomated process.">
+        <svg viewBox="0 0 1500 350" role="img" aria-label="Pipeline diagram: a dev Azure SQL database and dev git branch feed into promote-dev-to-uat.yml, which deploys and validates against the UAT database. On a clean pass it auto-merges dev into uat with no human review. On failure, a second job in the same workflow sends the failure back to an LLM against the dev database; if that converges it pushes a fix back to the dev branch, re-triggering the whole workflow, capped at three rounds before it stops for a human. The uat branch then goes through a pull request gated by uat-to-prd-gate.yml and a human merge into main, which represents prd. Actual deployment to the real production Synapse warehouse is a separate, unautomated process.">
           <defs>
             <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
               <path d="M0,0 L10,5 L0,10 Z" fill="currentColor"/>
@@ -223,6 +224,9 @@ footer {
             </marker>
             <marker id="arrowMuted" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
               <path d="M0,0 L10,5 L0,10 Z" fill="var(--fg-muted)"/>
+            </marker>
+            <marker id="arrowBad" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+              <path d="M0,0 L10,5 L0,10 Z" fill="var(--bad)"/>
             </marker>
           </defs>
 
@@ -260,6 +264,10 @@ footer {
           <!-- gate1 to UAT branch (merge) -->
           <line x1="460" y1="195" x2="630" y2="195" stroke="var(--accent)" stroke-width="1.3" marker-end="url(#arrow)"/>
           <text x="545" y="210" text-anchor="middle" font-size="10" fill="var(--accent)">2 — merge dev → uat</text>
+
+          <!-- gate1 fail: auto-fix-and-retry job loops back to dev -->
+          <path d="M 400 230 L 400 302 Q 400 314 388 314 L 172 314 Q 160 314 160 302 L 160 230" fill="none" stroke="var(--bad)" stroke-width="1.2" stroke-dasharray="4 3" marker-end="url(#arrowBad)"/>
+          <text x="280" y="330" text-anchor="middle" font-size="10" fill="var(--bad)">3 — on fail: LLM auto-fix in dev, re-triggers (≤3 rounds, then stops for a human)</text>
 
           <!-- UAT zone -->
           <rect x="630" y="20" width="220" height="50" rx="4" fill="var(--surface-2)" stroke="var(--border)"/>
@@ -299,11 +307,12 @@ footer {
           <text x="1335" y="296" text-anchor="middle" font-size="10.5" opacity="0.75" fill="var(--fg-muted)">deploy — not automated</text>
         </svg>
       </div>
-      <figcaption>Fig. 1 — <code>dev</code> and <code>uat</code> each sit next to their own Azure SQL database. Gate 1 is a GitHub Action with no human in the loop. Gate 2 is a pull request a person has to merge. <code>main</code> stands for "promoted to prd," but nothing here actually deploys to the real Synapse warehouse — that step is still the existing release process.</figcaption>
+      <figcaption>Fig. 1 — <code>dev</code> and <code>uat</code> each sit next to their own Azure SQL database. Gate 1 is a GitHub Action with no human in the loop — and on a failure it doesn't just stop: a second job in the same workflow sends the failure back to an LLM against the <code>dev</code> database, and a converged fix pushes back to <code>dev</code>, re-triggering Gate 1 fresh. That closes after at most three rounds, win or lose. Gate 2 is a pull request a person has to merge. <code>main</code> stands for "promoted to prd," but nothing here actually deploys to the real Synapse warehouse — that step is still the existing release process.</figcaption>
     </figure>
 
     <ul class="explain">
       <li class="auto"><strong>promote-dev-to-uat.yml</strong>Fires on every push to <code>dev</code> that touches <code>procs/**.sql</code> or <code>tests/**.yaml</code>. Deploys the candidate to UAT inside one transaction, runs the validation suite, and — only on a clean pass — merges <code>dev</code> into <code>uat</code> and pushes. A failed deploy rolls back; nothing in UAT changes.</li>
+      <li class="bad"><strong>auto-fix-and-retry job</strong>Runs only when the <code>promote</code> job above fails. Calls <code>harness/evolve_cli.py --provider deepseek</code> against the <code>dev</code> database (the same fix loop as Fig. 2), and if it converges, commits the result back to <code>dev</code> with a <code>[auto-fix round N/3]</code> tag — which re-triggers this workflow from the top. The tag is how each run (a fresh job, no shared state) knows which round it's on; past round 3 it stops and leaves the failure for a human instead of trying again.</li>
       <li class="human"><strong>uat-to-prd-gate.yml</strong>Fires on a pull request into <code>main</code>. Re-validates against UAT as a required check so the reviewer sees current pass/fail before deciding — but merging is always a person's click, never automatic.</li>
       <li class="bad"><strong>Where this stops</strong>Nothing past <code>main</code> is built yet. Getting a merged change into the actual production Synapse warehouse is still whatever your team's release process already is.</li>
     </ul>

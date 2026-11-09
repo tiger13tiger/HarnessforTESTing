@@ -15,6 +15,12 @@ version. This file is the short version, written as a checklist.
 ```
 dev  --(human or evolve_cli.py's LLM auto-fix loop)-->  dev
 dev  --(promote-dev-to-uat.yml: automatic, no human review)-->  uat
+                    |
+                    | on failure: auto-fix-and-retry job sends the
+                    | failure back to an LLM against dev, pushes a fix,
+                    | re-triggers from the top (max 3 rounds)
+                    v
+                   dev
 uat  --(a reviewed pull request, gated by uat-to-prd-gate.yml)-->  main
 ```
 
@@ -47,6 +53,15 @@ never a PR from `dev` or any other branch.
   looked at the diff before it moved further (fine to land unreviewed on
   `dev` itself — that's the design — but it should get a human look before
   `uat -> main`).
+- The `auto-fix-and-retry` job hitting its 3-round cap (an `::error::` from
+  the "Determine round number" step in `promote-dev-to-uat.yml`, with no
+  further commits following it) and nobody looking at why the LLM couldn't
+  converge — this is the one case in the dev -> uat step that's supposed to
+  stop and wait for a human instead of resolving itself.
+- A `[auto-fix round N/3]` commit on `dev` whose diff doesn't actually
+  change the procedure file (the job should have made no commit at all in
+  that case) — would indicate the no-op guard in that job's push step
+  isn't doing what it's supposed to.
 
 ## Last known-good state
 

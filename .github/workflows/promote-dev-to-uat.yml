@@ -77,3 +77,84 @@ jobs:
           git checkout uat
           git merge --no-ff origin/dev -m "Auto-merge dev into uat: validated against UAT"
           git push origin uat
+
+  # Runs only when the promote job above failed (UAT rejected the candidate).
+  # Sends the failure back to an LLM in harness/evolve.py against DEV, and if
+  # it converges, pushes the fix to dev -- which re-triggers this whole
+  # workflow fresh, naturally retrying the dev -> uat promotion. Capped at 3
+  # outer rounds (tracked via a "[auto-fix round N/3]" tag in the commit
+  # message, since each round is a separate workflow run with no shared
+  # state) so a procedure the LLM can't fix doesn't loop forever -- it stops
+  # and waits for a human instead.
+  auto-fix-and-retry:
+    needs: promote
+    if: failure()
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: dev
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install the Microsoft ODBC driver for SQL Server
+        run: |
+          curl -sSL -O https://packages.microsoft.com/config/ubuntu/22.04/packages-microsoft-prod.deb
+          sudo dpkg -i packages-microsoft-prod.deb
+          sudo apt-get update
+          sudo ACCEPT_EULA=Y apt-get install -y msodbcsql18
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Determine round number
+        id: round
+        run: |
+          LAST_SUBJECT="$(git log -1 --pretty=%s)"
+          LAST_ROUND="$(echo "$LAST_SUBJECT" | grep -oP '\[auto-fix round \K[0-9]+(?=/3\])' || true)"
+          if [ -z "$LAST_ROUND" ]; then
+            NEXT_ROUND=1
+          else
+            NEXT_ROUND=$((LAST_ROUND + 1))
+          fi
+          if [ "$NEXT_ROUND" -gt 3 ]; then
+            echo "::error::Auto-fix cap reached (3/3) without a passing UAT run. Stopping for human review."
+            exit 1
+          fi
+          echo "next_round=$NEXT_ROUND" >> "$GITHUB_OUTPUT"
+
+      - name: Ask the LLM to fix the procedure against DEV
+        env:
+          SYNAPSE_DEV_CONN_STR: ${{ secrets.SYNAPSE_DEV_CONN_STR }}
+          DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
+        run: |
+          python -m harness.evolve_cli \
+            --proc procs/sp_refresh_fact_sales.example.sql \
+            --exec-statement "EXEC dbo.sp_refresh_fact_sales" \
+            --suite tests/golden_fact_sales.example.yaml \
+            --allowed-schema dbo \
+            --conn-env SYNAPSE_DEV_CONN_STR \
+            --provider deepseek
+
+      - name: Upload report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: auto-fix-report
+          path: reports/
+          if-no-files-found: ignore
+
+      - name: Commit and push the fix back to dev
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          if git diff --quiet -- procs/sp_refresh_fact_sales.example.sql; then
+            echo "No change produced by the LLM; nothing to push."
+            exit 0
+          fi
+          git add procs/sp_refresh_fact_sales.example.sql
+          git commit -m "Auto-fix after UAT rejection [auto-fix round ${{ steps.round.outputs.next_round }}/3]"
+          git push origin HEAD:dev
