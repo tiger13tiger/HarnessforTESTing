@@ -20,6 +20,8 @@ This maps directly onto the existing process: dev and uat are where
 iteration happens freely, and prd only ever gets what a person actually
 signed off on.
 
+See [`docs/architecture.html`](docs/architecture.html) for a diagrammed walkthrough of this pipeline and of the `evolve()` fix loop's internals, and `PROCESS.md` for what a healthy pipeline state looks like.
+
 ## Why this shape
 
 This harness borrows a few ideas from an AI-agent evaluation framework
