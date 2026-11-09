@@ -14,8 +14,11 @@ Safety by construction, not by convention:
   see the attempt's own uncommitted changes, and a failing attempt is rolled
   back as a unit -- a candidate that doesn't pass never leaves a mark on the
   sandbox schema, even if it TRUNCATEs and re-INSERTs a table along the way;
-- a failure is tagged with the stage it failed at (deploy/exec/validate), so
-  the LLM gets a specific signal instead of one undifferentiated error blob;
+- a failure is tagged with the stage it failed at (deploy/exec/validate), and
+  the LLM gets stage-specific repair guidance (harness/llm_client.py's
+  STAGE_GUIDANCE) instead of one undifferentiated error blob -- a syntax
+  error, a runtime EXEC error, and a wrong-data mismatch are different
+  problems and point the model at different kinds of fixes;
 - the LLM call itself is retried on transient failure and never allowed to
   crash the loop -- an exhausted LLM is a failed iteration, not a stack trace;
 - this loop never writes to git, never opens a PR and never deploys outside
@@ -56,13 +59,13 @@ def _run_one_attempt(txn, candidate_sql: str, exec_statement: str, validation_su
     return "validate", run_suite(validation_suite, txn), None
 
 
-def _suggest_fix_with_retries(llm_client, candidate_sql, failing_checks, context, retries=2):
+def _suggest_fix_with_retries(llm_client, candidate_sql, failing_checks, context, stage, retries=2):
     """Never lets a flaky LLM call crash the loop: retries with backoff, then
     reports the exhaustion as a (suggestion=None, error) pair instead of raising."""
     last_exc = None
     for attempt in range(retries + 1):
         try:
-            return llm_client.suggest_fix(candidate_sql, failing_checks, context), None
+            return llm_client.suggest_fix(candidate_sql, failing_checks, context, stage=stage), None
         except Exception as exc:  # noqa: BLE001 - provider SDKs raise their own exception types
             last_exc = exc
             if attempt < retries:
@@ -116,9 +119,7 @@ def evolve(
             break
 
         suggestion, llm_error = _suggest_fix_with_retries(
-            llm_client, candidate_sql, failing,
-            f"{context}\n\nThe previous attempt failed at the '{stage}' stage.",
-            retries=llm_retries,
+            llm_client, candidate_sql, failing, context, stage, retries=llm_retries,
         )
         if llm_error is not None:
             history.append(Iteration(attempt, candidate_sql, stage="llm", error=f"LLM call failed after retries: {llm_error}"))

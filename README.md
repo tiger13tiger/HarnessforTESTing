@@ -170,6 +170,28 @@ python -m harness.evolve_cli \
 Each iteration's checks, pass/fail, and the LLM's stated rationale for its
 next attempt are recorded in `reports/evolve_report.md`.
 
+### Does the loop actually converge? (harness/benchmark.py)
+
+```bash
+python -m harness.benchmark_cli
+```
+
+Six scripted-LLM scenarios (fixes immediately, fixes after three tries, never
+converges, a deploy→exec→data-bug chain exercising all three failure stages,
+an LLM that flakes once then recovers, an LLM that proposes a fix outside the
+allowed schema) run through the real `evolve()` loop and report whether each
+one converged the way it's designed to, in how many iterations.
+
+**What this does and doesn't prove.** It's loop-mechanics testing, not a
+real-world accuracy benchmark: every scenario uses `MockLLMClient` with
+scripted responses, so it proves the loop converges, rolls back, tags stages,
+enforces the guardrail, and tolerates a flaky LLM call correctly — not that a
+real model fixes real bugs at some success rate. That number only comes from
+running `evolve_cli.py` against real procedures over time and counting
+outcomes; this harness doesn't track that yet. Re-run this (`tests/test_benchmark.py`
+runs it in CI) after any change to `harness/evolve.py`, the same way you'd
+re-run a MockAgent against planted bugs before trusting a changed evaluator.
+
 ## Stage 2 — dev → uat: automatic promotion (harness/promote_cli.py)
 
 `.github/workflows/promote-dev-to-uat.yml` fires on every push to `dev`. It

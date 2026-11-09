@@ -123,6 +123,7 @@ def test_evolve_rolls_back_and_reports_a_deploy_failure_distinctly_from_a_check_
     assert "syntax" in history[0].error
     assert history[0].results == []  # distinct from a check-level failure, which would have results
     assert connector.rolled_back == 1  # the failed deploy attempt was rolled back (a no-op, but explicit)
+    assert llm.calls[0]["stage"] == "deploy"  # the LLM gets told which stage failed, for typed repair guidance
 
 
 def test_evolve_fails_cleanly_instead_of_crashing_when_the_llm_keeps_erroring(monkeypatch):
