@@ -112,6 +112,19 @@ def test_aggregate_fails_on_planted_calc_error():
     assert status == "fail"
 
 
+def test_aggregate_handles_decimal_values_from_a_real_sql_server_decimal_column():
+    # caught by a real CI run: pyodbc returns decimal.Decimal for DECIMAL columns,
+    # and Decimal - float raises TypeError -- this must not crash the check
+    from decimal import Decimal
+    conn = MockConnector({"SELECT SUM(revenue) AS total_revenue FROM t": [{"total_revenue": Decimal("100050.00")}]})
+    status, _, _ = aggregate.run(conn, {
+        "sql": "SELECT SUM(revenue) AS total_revenue FROM t",
+        "expected": {"total_revenue": 100000.0},
+        "tolerance_abs": 100,
+    })
+    assert status == "pass"
+
+
 def test_pivot_readiness_pass_when_clean():
     conn = MockConnector({
         "SELECT COLUMN_NAME, DATA_TYPE FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA = 'dbo' AND TABLE_NAME = 'fact_sales'":

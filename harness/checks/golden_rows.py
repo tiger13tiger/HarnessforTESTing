@@ -29,7 +29,11 @@ def run(connector, params: dict):
             expected_val = expected_row.get(measure)
             actual_val = actual_row.get(measure)
             tolerance_abs = tolerance.get("tolerance_abs", 0)
-            if expected_val is None or actual_val is None or abs(actual_val - expected_val) > tolerance_abs:
+            # actual_val can be a decimal.Decimal (SQL Server DECIMAL columns, via pyodbc);
+            # expected_val is whatever YAML parsed (usually float) -- Decimal - float raises
+            # TypeError, so compare as float (tolerance_abs is already a fuzzy comparison,
+            # not an exact one, so the precision loss doesn't matter here)
+            if expected_val is None or actual_val is None or abs(float(actual_val) - float(expected_val)) > tolerance_abs:
                 mismatches.append({
                     "key": key, "measure": measure, "expected": expected_val, "actual": actual_val,
                 })

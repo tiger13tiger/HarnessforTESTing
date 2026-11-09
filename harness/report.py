@@ -93,9 +93,10 @@ def write_evolve_report(success: bool, history, output_dir) -> dict:
     ]
     for it in history:
         lines.append(f"## Attempt {it.attempt} (stage: {it.stage})")
-        if it.stage in ("guardrail", "deploy", "exec", "llm"):
+        if it.stage in ("guardrail", "connect", "deploy", "exec", "llm"):
             label = {
                 "guardrail": "blocked by guardrail (never deployed)",
+                "connect": "could not open a connection after retries",
                 "deploy": "deploy failed, rolled back",
                 "exec": "EXEC failed, rolled back",
                 "llm": "could not get a fix from the LLM",

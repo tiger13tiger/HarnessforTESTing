@@ -1,12 +1,30 @@
 """Connections to Azure Synapse SQL, for executing test queries and -- for the
 evolve loop -- deploying/running a candidate stored procedure."""
 import os
+import time
 
 TRANSIENT_SQLSTATES = {"08S01", "HYT00", "40001", "40613"}
 
 
 class TransientError(Exception):
     """A connection/query error worth retrying (deadlock, timeout, throttling)."""
+
+
+def open_transaction_with_retries(connector, retries: int = 2) -> "SynapseTransaction":
+    """Opens a transaction, retrying on TransientError (login timeout, deadlock,
+    throttling) with backoff -- so a connection blip doesn't crash the caller with
+    an unhandled exception the way a bare connector.transaction() call would.
+    Callers in promote.py/evolve.py use this instead of calling transaction()
+    directly; a persistent failure still raises after retries are exhausted."""
+    last_exc = None
+    for attempt in range(retries + 1):
+        try:
+            return connector.transaction()
+        except TransientError as exc:
+            last_exc = exc
+            if attempt < retries:
+                time.sleep(2 ** (attempt + 1))
+    raise last_exc
 
 
 class SynapseConnector:
