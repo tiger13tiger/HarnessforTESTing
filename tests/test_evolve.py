@@ -1,5 +1,6 @@
 """Proves the auto-fix loop itself, with a mock connector and a scripted mock LLM --
 no real Synapse connection or API key needed."""
+from harness.connector import TransientError
 from harness.evolve import evolve
 from harness.llm_client import FixSuggestion, MockLLMClient
 from harness.mock_connector import MockConnector
@@ -124,6 +125,35 @@ def test_evolve_rolls_back_and_reports_a_deploy_failure_distinctly_from_a_check_
     assert history[0].results == []  # distinct from a check-level failure, which would have results
     assert connector.rolled_back == 1  # the failed deploy attempt was rolled back (a no-op, but explicit)
     assert llm.calls[0]["stage"] == "deploy"  # the LLM gets told which stage failed, for typed repair guidance
+
+
+def test_evolve_stops_cleanly_instead_of_crashing_when_the_connection_keeps_failing(monkeypatch):
+    # caught by a real CI run: connector.transaction() raising TransientError
+    # (a real login timeout against a bad connection string) used to propagate
+    # as an unhandled exception out of evolve() entirely
+    monkeypatch.setattr("harness.connector.time.sleep", lambda _s: None)
+
+    class _AlwaysUnreachable:
+        def transaction(self):
+            raise TransientError("login timeout")
+
+    llm = MockLLMClient([])  # must never be called -- this isn't a SQL problem
+
+    success, history = evolve(
+        initial_sql=BUGGY_SQL,
+        exec_statement="EXEC sandbox.sp_refresh",
+        validation_suite=SUITE,
+        connector=_AlwaysUnreachable(),
+        llm_client=llm,
+        allowed_schema="sandbox",
+        max_iterations=5,
+    )
+
+    assert success is False
+    assert len(history) == 1  # stopped immediately, didn't burn iterations retrying unreachable infra
+    assert history[0].stage == "connect"
+    assert "login timeout" in history[0].error
+    assert llm.calls == []
 
 
 def test_evolve_fails_cleanly_instead_of_crashing_when_the_llm_keeps_erroring(monkeypatch):

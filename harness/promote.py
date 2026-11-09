@@ -9,6 +9,7 @@ just because this step wasn't reviewed by a human. This matters more here
 than in evolve.py's sandbox, since promote.py is the one step in the whole
 pipeline that runs fully unattended.
 """
+from harness.connector import open_transaction_with_retries
 from harness.guardrails import check_candidate_sql
 from harness.report import gate_failed
 from harness.runner import run_suite
@@ -17,7 +18,9 @@ from harness.runner import run_suite
 def promote(sql: str, exec_statement: str, validation_suite: dict, connector, allowed_schema: str):
     check_candidate_sql(sql, allowed_schema)  # raises GuardrailViolation; caller decides what to do with it
 
-    txn = connector.transaction()
+    # retried on a transient connection failure; a persistent one still raises
+    # TransientError here, which promote_cli.py catches and reports cleanly
+    txn = open_transaction_with_retries(connector)
     try:
         try:
             txn.execute(sql)

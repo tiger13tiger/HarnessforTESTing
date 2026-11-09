@@ -1,5 +1,6 @@
 import pytest
 
+from harness.connector import TransientError
 from harness.guardrails import GuardrailViolation
 from harness.mock_connector import MockConnector
 from harness.promote import promote
@@ -44,3 +45,32 @@ def test_promote_rolls_back_on_a_deploy_failure_too():
         promote(SQL_OK, "EXEC dbo.sp_refresh", SUITE, conn, allowed_schema="dbo")
     assert conn.rolled_back == 1
     assert conn.committed == 0
+
+
+def test_promote_retries_a_transient_connection_failure_then_succeeds(monkeypatch):
+    monkeypatch.setattr("harness.connector.time.sleep", lambda _s: None)
+
+    class _FlakyThenOk:
+        def __init__(self):
+            self.calls = 0
+
+        def transaction(self):
+            self.calls += 1
+            if self.calls == 1:
+                raise TransientError("login timeout")
+            return MockConnector({CHECK_SQL: [{"revenue": 100.0}]}).transaction()
+
+    results = promote(SQL_OK, "EXEC dbo.sp_refresh", SUITE, _FlakyThenOk(), allowed_schema="dbo")
+    assert results[0].status == "pass"
+
+
+def test_promote_raises_transient_error_after_exhausting_retries(monkeypatch):
+    # caught by a real CI run: this used to be an unhandled exception out of promote()
+    monkeypatch.setattr("harness.connector.time.sleep", lambda _s: None)
+
+    class _AlwaysUnreachable:
+        def transaction(self):
+            raise TransientError("login timeout")
+
+    with pytest.raises(TransientError):
+        promote(SQL_OK, "EXEC dbo.sp_refresh", SUITE, _AlwaysUnreachable(), allowed_schema="dbo")
