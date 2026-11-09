@@ -61,3 +61,67 @@ class SynapseConnector:
             if sqlstate in TRANSIENT_SQLSTATES:
                 raise TransientError(str(exc)) from exc
             raise
+
+    def transaction(self) -> "SynapseTransaction":
+        """Opens one connection, held across deploy -> exec -> validate, so validation
+        queries see the uncommitted changes and the whole attempt can be rolled back
+        as a unit. SQL Server/Synapse DDL (CREATE OR ALTER PROCEDURE included) is
+        transactional, so this also undoes a candidate's procedure definition, not
+        just its data changes, when the caller rolls back."""
+        import pyodbc
+
+        try:
+            conn = pyodbc.connect(self.conn_str, timeout=self.query_timeout, autocommit=False)
+            conn.timeout = self.query_timeout
+        except pyodbc.Error as exc:
+            sqlstate = exc.args[0] if exc.args else ""
+            if sqlstate in TRANSIENT_SQLSTATES:
+                raise TransientError(str(exc)) from exc
+            raise
+        return SynapseTransaction(conn)
+
+
+class SynapseTransaction:
+    """A single open connection/transaction. execute()/query() behave like the ones on
+    SynapseConnector but run on this one connection, so they see each other's
+    uncommitted writes. Caller decides commit() vs rollback(); close() always runs."""
+
+    def __init__(self, conn):
+        self._conn = conn
+
+    def execute(self, sql: str, params: list | None = None) -> None:
+        import pyodbc
+
+        try:
+            cursor = self._conn.cursor()
+            cursor.execute(sql, params or [])
+        except pyodbc.Error as exc:
+            sqlstate = exc.args[0] if exc.args else ""
+            if sqlstate in TRANSIENT_SQLSTATES:
+                raise TransientError(str(exc)) from exc
+            raise
+
+    def query(self, sql: str, params: list | None = None) -> list[dict]:
+        import pyodbc
+
+        try:
+            cursor = self._conn.cursor()
+            cursor.execute(sql, params or [])
+            if cursor.description is None:
+                return []
+            columns = [c[0] for c in cursor.description]
+            return [dict(zip(columns, row)) for row in cursor.fetchall()]
+        except pyodbc.Error as exc:
+            sqlstate = exc.args[0] if exc.args else ""
+            if sqlstate in TRANSIENT_SQLSTATES:
+                raise TransientError(str(exc)) from exc
+            raise
+
+    def commit(self) -> None:
+        self._conn.commit()
+
+    def rollback(self) -> None:
+        self._conn.rollback()
+
+    def close(self) -> None:
+        self._conn.close()

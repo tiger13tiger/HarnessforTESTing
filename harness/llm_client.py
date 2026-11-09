@@ -16,7 +16,7 @@ class FixSuggestion:
 
 
 class LLMClient:
-    def suggest_fix(self, original_sql: str, failing_checks: list[dict], context: str) -> FixSuggestion:
+    def suggest_fix(self, original_sql: str, failing_checks: list[dict], context: str, stage: str = "validate") -> FixSuggestion:
         raise NotImplementedError
 
 
@@ -27,8 +27,8 @@ class MockLLMClient(LLMClient):
         self._responses = list(responses)
         self.calls: list[dict] = []
 
-    def suggest_fix(self, original_sql, failing_checks, context):
-        self.calls.append({"original_sql": original_sql, "failing_checks": failing_checks, "context": context})
+    def suggest_fix(self, original_sql, failing_checks, context, stage="validate"):
+        self.calls.append({"original_sql": original_sql, "failing_checks": failing_checks, "context": context, "stage": stage})
         if not self._responses:
             raise RuntimeError("MockLLMClient exhausted its scripted responses")
         return self._responses.pop(0)
@@ -41,11 +41,11 @@ class AnthropicLLMClient(LLMClient):
         if not self.api_key:
             raise RuntimeError("ANTHROPIC_API_KEY not set")
 
-    def suggest_fix(self, original_sql, failing_checks, context):
+    def suggest_fix(self, original_sql, failing_checks, context, stage="validate"):
         import anthropic  # imported lazily: not needed unless a real fix is requested
 
         client = anthropic.Anthropic(api_key=self.api_key)
-        prompt = _build_prompt(original_sql, failing_checks, context)
+        prompt = _build_prompt(original_sql, failing_checks, context, stage)
         response = client.messages.create(
             model=self.model,
             max_tokens=4096,
@@ -67,10 +67,10 @@ class DeepSeekLLMClient(LLMClient):
             raise RuntimeError("DEEPSEEK_API_KEY not set")
         self.base_url = base_url.rstrip("/")
 
-    def suggest_fix(self, original_sql, failing_checks, context):
+    def suggest_fix(self, original_sql, failing_checks, context, stage="validate"):
         import requests  # imported lazily, same reasoning as anthropic/pyodbc above
 
-        prompt = _build_prompt(original_sql, failing_checks, context)
+        prompt = _build_prompt(original_sql, failing_checks, context, stage)
         response = requests.post(
             f"{self.base_url}/chat/completions",
             headers={"Authorization": f"Bearer {self.api_key}"},
@@ -88,7 +88,37 @@ class DeepSeekLLMClient(LLMClient):
         return FixSuggestion(sql=sql, rationale=text)
 
 
-def _build_prompt(original_sql: str, failing_checks: list[dict], context: str) -> str:
+# Typed repair routing (SIRIUS-SQL's term for this): a deploy-time syntax error, a
+# runtime EXEC error, and a wrong-data validation failure are different problems and
+# get different guidance, instead of one generic "something failed" prompt.
+STAGE_GUIDANCE = {
+    "deploy": (
+        "The CREATE OR ALTER PROCEDURE statement itself failed to deploy -- this is a "
+        "T-SQL syntax or object-definition error, not a business-logic problem. Focus "
+        "only on making it valid T-SQL: missing commas/semicolons, unmatched BEGIN/END, "
+        "misspelled keywords, or a reference to a column/table that doesn't exist. Do "
+        "not change the procedure's logic beyond what's needed to make it compile."
+    ),
+    "exec": (
+        "The procedure deployed successfully but threw a runtime error when executed. "
+        "Common causes: a referenced table/column that doesn't exist at runtime, a type "
+        "conversion failure, a divide-by-zero, or a constraint violation (e.g. a "
+        "duplicate key insert against a unique index). Focus on the specific statement "
+        "that would raise this error, not on the final output shape."
+    ),
+    "validate": (
+        "The procedure deployed and ran without error, but its output doesn't match the "
+        "verified business figures -- this is a logic bug, not a syntax error. Common "
+        "causes: a fan-out join inflating counts/sums, a missing or wrong WHERE filter, "
+        "UNION vs UNION ALL double-counting or dropping rows, or GROUP BY at the wrong "
+        "granularity. Check join conditions and grouping columns against what the gold "
+        "figures imply."
+    ),
+}
+
+
+def _build_prompt(original_sql: str, failing_checks: list[dict], context: str, stage: str = "validate") -> str:
+    guidance = STAGE_GUIDANCE.get(stage, STAGE_GUIDANCE["validate"])
     checks_desc = "\n".join(
         f"- {c['id']}: {c['message']} (details: {c['details']})" for c in failing_checks
     )
@@ -98,12 +128,15 @@ matches verified business figures.
 Context:
 {context}
 
+What went wrong (failed at the '{stage}' stage):
+{guidance}
+
 Current stored procedure:
 ```sql
 {original_sql}
 ```
 
-These validation checks failed after running it:
+Specific error/check output:
 {checks_desc}
 
 Return ONLY the corrected, complete `CREATE OR ALTER PROCEDURE ...` statement in a \

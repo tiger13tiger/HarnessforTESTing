@@ -131,6 +131,22 @@ python -m harness.evolve_cli \
   security boundary — the real isolation is that `--conn-env` should point
   at your DEV environment, physically separate from UAT/PRD, with
   least-privilege credentials.
+- **Every attempt runs in one transaction, rolled back on failure.**
+  Deploy → `EXEC` → validate all happen on the same held-open connection
+  (`harness/connector.py`'s `SynapseTransaction`), so the validation
+  queries see that attempt's own uncommitted changes. A failing attempt is
+  rolled back as a unit before the LLM is asked for a fix — if the
+  procedure `TRUNCATE`s and re-`INSERT`s a table, a candidate that doesn't
+  pass never leaves that table changed. Only a passing attempt commits.
+- **Failures are tagged by stage, not lumped together.** A candidate can
+  fail to deploy (bad DDL), fail to `EXEC` (runtime error), or deploy fine
+  but produce the wrong data (`stage` is `deploy`/`exec`/`validate` on each
+  `Iteration` in `reports/evolve_report.md`). The LLM gets told which one
+  happened, instead of one undifferentiated error blob.
+- **A flaky LLM call can't crash the loop.** `suggest_fix()` is retried
+  with backoff on failure (network blip, rate limit); if it's still
+  failing after `--llm-retries` (not just this one call), that's recorded
+  as a failed iteration with `stage: llm`, not an unhandled exception.
 - **`--push` is opt-in and scoped to dev.** Without it, nothing is
   committed — the final SQL and iteration report are just local files for
   you to review. With it, the loop commits and pushes the final passing
@@ -153,6 +169,28 @@ python -m harness.evolve_cli \
 
 Each iteration's checks, pass/fail, and the LLM's stated rationale for its
 next attempt are recorded in `reports/evolve_report.md`.
+
+### Does the loop actually converge? (harness/benchmark.py)
+
+```bash
+python -m harness.benchmark_cli
+```
+
+Six scripted-LLM scenarios (fixes immediately, fixes after three tries, never
+converges, a deploy→exec→data-bug chain exercising all three failure stages,
+an LLM that flakes once then recovers, an LLM that proposes a fix outside the
+allowed schema) run through the real `evolve()` loop and report whether each
+one converged the way it's designed to, in how many iterations.
+
+**What this does and doesn't prove.** It's loop-mechanics testing, not a
+real-world accuracy benchmark: every scenario uses `MockLLMClient` with
+scripted responses, so it proves the loop converges, rolls back, tags stages,
+enforces the guardrail, and tolerates a flaky LLM call correctly — not that a
+real model fixes real bugs at some success rate. That number only comes from
+running `evolve_cli.py` against real procedures over time and counting
+outcomes; this harness doesn't track that yet. Re-run this (`tests/test_benchmark.py`
+runs it in CI) after any change to `harness/evolve.py`, the same way you'd
+re-run a MockAgent against planted bugs before trusting a changed evaluator.
 
 ## Stage 2 — dev → uat: automatic promotion (harness/promote_cli.py)
 
