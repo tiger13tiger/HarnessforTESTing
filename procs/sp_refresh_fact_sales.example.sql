@@ -1,8 +1,10 @@
--- Trigger run 4: fixed the Decimal-vs-float TypeError in golden_rows/aggregate checks.
--- Example candidate procedure for the auto-fix loop (harness/evolve_cli.py).
--- Deliberately contains a planted bug (double-counts revenue via a fan-out
--- join) so running the example end to end demonstrates a failing first
--- attempt and a fix on the next one.
+-- Fixed version: see procs/sp_refresh_fact_sales.buggy_example.sql for the
+-- planted-bug original (kept to demonstrate harness/evolve_cli.py's auto-fix
+-- loop against DEV). The bug was a plain JOIN against dbo.store_promotions,
+-- which fans out one sale row per promotion row for any store running more
+-- than one active promotion -- fixed here by de-duplicating store_id before
+-- the join, so a store's sales are only ever counted once regardless of how
+-- many active promotions it has.
 CREATE OR ALTER PROCEDURE dbo.sp_refresh_fact_sales
 AS
 BEGIN
@@ -14,7 +16,7 @@ BEGIN
         COUNT(*) AS txn_count
     INTO #tmp_fact_sales
     FROM dbo.raw_sales s
-    JOIN dbo.store_promotions p ON p.store_id = s.store_id  -- planted bug: fans out one sale per active promotion row
+    JOIN (SELECT DISTINCT store_id FROM dbo.store_promotions) p ON p.store_id = s.store_id
     GROUP BY s.product_category;
 
     TRUNCATE TABLE dbo.fact_sales;
