@@ -1,4 +1,4 @@
--- Trigger run 3: data is now seeded in both Azure SQL databases, re-test for a real match/mismatch.
+-- Trigger run 4: fixed the Decimal-vs-float TypeError in golden_rows/aggregate checks.
 -- Example candidate procedure for the auto-fix loop (harness/evolve_cli.py).
 -- Deliberately contains a planted bug (double-counts revenue via a fan-out
 -- join) so running the example end to end demonstrates a failing first
