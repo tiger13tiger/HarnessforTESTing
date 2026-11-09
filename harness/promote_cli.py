@@ -15,7 +15,7 @@ import sys
 from pathlib import Path
 
 from harness.config import load_suite
-from harness.connector import SynapseConnector
+from harness.connector import SynapseConnector, TransientError
 from harness.guardrails import GuardrailViolation
 from harness.promote import promote
 from harness.report import write_reports
@@ -44,6 +44,9 @@ def main(argv=None) -> int:
         results = promote(sql, args.exec_statement, suite, connector, args.allowed_schema)
     except GuardrailViolation as exc:
         print(f"error: {exc}", file=sys.stderr)
+        return 1
+    except TransientError as exc:
+        print(f"error: connection kept failing after retries: {exc}", file=sys.stderr)
         return 1
 
     summary = write_reports(results, suite["suite"], suite["version"], args.output_dir)
