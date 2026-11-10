@@ -17,6 +17,13 @@ permissions:
   contents: read
   pull-requests: write
 
+# A new push to the PR branch makes the in-flight validation of the old
+# commit pointless -- cancel it instead of letting it finish and post a
+# stale pass/fail.
+concurrency:
+  group: uat-to-prd-gate-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
 jobs:
   validate:
     runs-on: ubuntu-latest

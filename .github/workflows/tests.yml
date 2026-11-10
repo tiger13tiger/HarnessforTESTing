@@ -22,6 +22,12 @@ on:
   pull_request:
     branches: [main]
 
+# No side effects here (no deploy, no git push), so it's always safe to
+# cancel a stale run in favor of a newer one -- unlike the other workflows.
+concurrency:
+  group: tests-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   test:
     runs-on: ubuntu-latest

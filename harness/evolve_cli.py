@@ -37,7 +37,7 @@ import sys
 from pathlib import Path
 
 from harness.config import load_suite
-from harness.connector import SynapseConnector
+from harness.connector import SynapseConnector, redact_secret
 from harness.evolve import evolve
 from harness.llm_client import AnthropicLLMClient, DeepSeekLLMClient
 from harness.report import write_evolve_report
@@ -79,11 +79,13 @@ def main(argv=None) -> int:
     suite = load_suite(args.suite)
     model = args.model or DEFAULT_MODELS[args.provider]
 
+    connector = None
     try:
         connector = SynapseConnector(env_var=args.conn_env)
         llm_client = DeepSeekLLMClient(model=model) if args.provider == "deepseek" else AnthropicLLMClient(model=model)
     except RuntimeError as exc:
-        print(f"error: {exc}", file=sys.stderr)
+        conn_str = getattr(connector, "conn_str", None) if connector else None
+        print(f"error: {redact_secret(str(exc), conn_str)}", file=sys.stderr)
         return 1
 
     try:
@@ -102,7 +104,8 @@ def main(argv=None) -> int:
         # and a retried-out TransientError internally; this catches what it can't, e.g. a
         # permanent (non-transient) connection error like bad credentials -- caught by a
         # real CI run that surfaced a raw traceback instead of a clean error here
-        print(f"error: {type(exc).__name__}: {exc}", file=sys.stderr)
+        conn_str = getattr(connector, "conn_str", None)
+        print(f"error: {type(exc).__name__}: {redact_secret(str(exc), conn_str)}", file=sys.stderr)
         return 1
 
     write_evolve_report(success, history, args.output_dir)

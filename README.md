@@ -13,9 +13,10 @@ It follows a `dev` → `uat` → `main` (prd) branch flow:
    review in this step, by design. Then it re-validates again, this time
    the actual merged `uat` state, not just the candidate. If either check
    fails, the failure goes back to an LLM against `dev`; a converged fix
-   pushes and re-triggers this whole step. Capped at 3 rounds total (shared
-   between both checks) before it stops and waits for a human. Only a clean
-   post-merge validation marks `uat` ready for stage 3.
+   pushes and re-triggers this whole step. Capped at 3 rounds per procedure
+   (tracked separately for each entry in `procs/manifest.yaml`, not shared
+   across them) before it stops and waits for a human on that procedure.
+   Only a clean post-merge validation marks `uat` ready for stage 3.
 3. **uat → prd** — the one manual gate. A human (the test analyst) opens a
    PR from `uat` into `main`; `.github/workflows/uat-to-prd-gate.yml`
    re-validates against UAT as a required check, but merging stays a human
@@ -264,16 +265,21 @@ reaches `uat`) or `validate-after-merge` (the merged state, after). Either
 one calls the same reusable workflow, `.github/workflows/auto-fix-dev.yml`,
 instead of just leaving things broken:
 
-1. Checks out `dev` and reads the last commit's message for a
-   `[auto-fix round N/3]` tag, to work out which round this is — there's no
-   shared state across runs, so the commit message is the only memory. Both
-   failure points share this one counter: it's one 3-round budget total,
-   not three rounds each.
-2. Past round 3, it fails loudly (`::error::`) and stops. This is meant to
-   be looked at by a person, not retried again.
-3. Otherwise it calls `harness/evolve_cli.py --provider deepseek` against
-   `SYNAPSE_DEV_CONN_STR` (no `--push`) — the same fix loop described in
-   Stage 1 below, just run unattended in CI.
+1. Checks out `dev`, then loops over `procs/manifest.yaml`. For each
+   procedure, `harness/metrics_log.py`'s `next_round_for_proc()` reads
+   `reports/metrics_log.jsonl` and counts that procedure's own consecutive
+   failures since its last logged success — each procedure has its own
+   round number, not a single counter shared across the whole manifest.
+   (This also means an unrelated commit landing on `dev` doesn't quietly
+   reset a procedure's count the way reading it off the last commit message
+   used to — the count only clears on a logged success for that procedure.)
+2. A procedure past its own round 3 is skipped: a loud `::error::` naming
+   it, and the job's own exit code reflects the failure, but every *other*
+   procedure in the manifest still gets its own attempt in the same run.
+   This is meant to be looked at by a person, not retried again.
+3. Procedures still in budget go to `harness/evolve_cli.py --provider
+   deepseek` against `SYNAPSE_DEV_CONN_STR` (no `--push`) — the same fix
+   loop described in Stage 1 below, just run unattended in CI.
 4. If `evolve_cli.py` converges, the job commits the updated proc file with
    the next round's tag and pushes to `dev` — which re-triggers
    `promote-dev-to-uat.yml` from the top, naturally retrying the whole dev
@@ -433,23 +439,3 @@ nobody got around to it.
 - **Branch protection on `uat`**: the promotion workflow pushes directly to
   `uat`. If you add a required-review rule there later, exempt the
   workflow's token or switch that step to a PR + auto-merge.
-- **No `concurrency:` group on any workflow**: one specific race (`promote`
-  failing and `validate-after-merge` getting skipped-but-still-"failed"
-  both firing `auto-fix-and-retry` for the same underlying failure) was
-  found and fixed with a conditional (`needs.validate-after-merge.result ==
-  'failure'` instead of bare `failure()`). That closes that one case, not
-  the general class — two overlapping pushes to `dev`, or two overlapping
-  calls into `auto-fix-dev.yml`, can still race on the `git push origin
-  HEAD:dev`/`uat` steps. A `concurrency: group: ${{ github.workflow }}-${{
-  github.ref }}` on each workflow would close this properly.
-- **The `[auto-fix round N/3]` cap reads the single latest commit message
-  on `dev`**, shared across every procedure in the manifest. Fine with one
-  real procedure; once a second one exists, an unrelated human commit (no
-  tag) resets the counter, and two procedures failing around the same time
-  share one round budget instead of having their own.
-- **No scrubbing of exception text before it's logged**: `promote_cli.py`
-  prints a `pyodbc` connection failure's exception text straight to
-  stderr, which lands in a public Actions log on this repo. This relies on
-  the ODBC driver never echoing the connection string (and therefore the
-  password) back in an error message — an assumption, not something this
-  harness verifies.

@@ -22,6 +22,24 @@ TRANSIENT_AZURE_ERROR_NUMBERS = {
 _AZURE_ERROR_NUMBER_RE = re.compile(r"\((\d+)\)")
 
 
+def redact_secret(text: str, conn_str: str | None) -> str:
+    """Strip a known connection string (and its PWD=/password= component) out
+    of error text before it's ever printed or logged. CLI error handlers print
+    exception text to stderr, which a public-repo CI run puts in a world-
+    readable Actions log -- this exists because that print was previously
+    trusting the ODBC driver to never echo the connection string (and
+    therefore the password) back in an error message, which isn't guaranteed.
+    """
+    if not text or not conn_str:
+        return text
+    redacted = text.replace(conn_str, "***REDACTED-CONN-STR***")
+    for part in conn_str.split(";"):
+        key, sep, value = part.partition("=")
+        if sep and value and key.strip().lower() in ("pwd", "password"):
+            redacted = redacted.replace(value, "***REDACTED-PWD***")
+    return redacted
+
+
 class TransientError(Exception):
     """A connection/query error worth retrying (deadlock, timeout, throttling,
     a serverless database resuming from auto-pause)."""
