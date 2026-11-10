@@ -35,6 +35,16 @@ on:
 permissions:
   contents: write
 
+# Queue overlapping runs instead of racing them -- two pushes to dev close
+# together (e.g. a human push landing right after an auto-fix push) could
+# otherwise both reach "Merge dev into uat" at once, which is a real git
+# push race, not just a wasted duplicate UAT deploy. cancel-in-progress:
+# false because a run already mid-deploy-to-UAT shouldn't be killed; let it
+# finish, queue the next one behind it.
+concurrency:
+  group: promote-dev-to-uat-${{ github.ref }}
+  cancel-in-progress: false
+
 jobs:
   promote:
     runs-on: ubuntu-latest

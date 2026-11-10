@@ -9,10 +9,11 @@ name: Auto-fix dev (reusable)
 # Either way: send the failure back to an LLM against the dev database, and
 # if it converges, push the fix to dev -- which re-triggers
 # promote-dev-to-uat.yml fresh, restarting the whole dev -> uat cycle. Capped
-# at 3 rounds TOTAL across both callers (tracked via a "[auto-fix round
-# N/3]" tag on the dev commit -- every run, from either caller, is a
-# separate job with no other shared state) so an unfixable procedure stops
-# and waits for a human instead of looping forever.
+# at 3 rounds per PROCEDURE (harness/metrics_log.py's next_round_for_proc(),
+# reading reports/metrics_log.jsonl -- each procedure's own consecutive
+# failure count, not a single counter shared across the whole manifest) so
+# an unfixable procedure stops and waits for a human instead of looping
+# forever, without one procedure's round count corrupting another's.
 #
 # IMPORTANT: the final push uses a PAT (secrets.GH_PAT), not the default
 # GITHUB_TOKEN. GitHub Actions deliberately does not let a push authenticated
@@ -46,6 +47,15 @@ on:
 permissions:
   contents: write
 
+# Both callers (promote failing, validate-after-merge failing) push to dev
+# via a PAT, which can re-trigger promote-dev-to-uat.yml, which can call
+# this workflow again -- queue overlapping calls instead of letting two
+# pushes to dev race on "git push origin HEAD:dev". cancel-in-progress:
+# false so an in-flight LLM call / DEV deploy isn't killed mid-run.
+concurrency:
+  group: auto-fix-dev-${{ github.ref }}
+  cancel-in-progress: false
+
 jobs:
   auto-fix-and-retry:
     runs-on: ubuntu-latest
@@ -70,26 +80,18 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt
 
-      - name: Determine round number
-        id: round
-        run: |
-          LAST_SUBJECT="$(git log -1 --pretty=%s)"
-          LAST_ROUND="$(echo "$LAST_SUBJECT" | grep -oP '\[auto-fix round \K[0-9]+(?=/3\])' || true)"
-          if [ -z "$LAST_ROUND" ]; then
-            NEXT_ROUND=1
-          else
-            NEXT_ROUND=$((LAST_ROUND + 1))
-          fi
-          if [ "$NEXT_ROUND" -gt 3 ]; then
-            echo "::error::Auto-fix cap reached (3/3) without a passing UAT run. Stopping for human review."
-            exit 1
-          fi
-          echo "next_round=$NEXT_ROUND" >> "$GITHUB_OUTPUT"
-
       - name: Check DeepSeek governance approval
         run: python -m harness.governance_check
 
       - name: Ask the LLM to fix each failing procedure against DEV
+        # Each procedure's round number is its own: computed fresh per
+        # entry from reports/metrics_log.jsonl, not shared. A procedure at
+        # its cap (round > 3) is skipped (FAILED=1, loud ::error::) without
+        # blocking any other procedure in the manifest from getting its own
+        # attempt. The round is written to each procedure's own output dir
+        # so the commit step below can tag its rationale section with it
+        # without recomputing (recomputing after this step's own metrics_log
+        # append would read back one-too-high).
         env:
           SYNAPSE_DEV_CONN_STR: ${{ secrets.SYNAPSE_DEV_CONN_STR }}
           DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
@@ -98,6 +100,15 @@ jobs:
           while IFS=$'\t' read -r proc suite exec_stmt schema; do
             echo "::group::$proc"
             OUTPUT_DIR="reports/$(basename "$proc" .sql)"
+            mkdir -p "$OUTPUT_DIR"
+            ROUND="$(python -m harness.metrics_log next-round --log reports/metrics_log.jsonl --proc "$proc")"
+            echo "$ROUND" > "$OUTPUT_DIR/auto_fix_round.txt"
+            if [ "$ROUND" -gt 3 ]; then
+              echo "::error::$proc has reached its auto-fix cap (3/3) without a passing UAT run. Stopping for human review on this procedure."
+              FAILED=1
+              echo "::endgroup::"
+              continue
+            fi
             python -m harness.evolve_cli \
               --proc "$proc" \
               --exec-statement "$exec_stmt" \
@@ -106,10 +117,10 @@ jobs:
               --conn-env SYNAPSE_DEV_CONN_STR \
               --provider deepseek \
               --output-dir "$OUTPUT_DIR" || FAILED=1
-            python -m harness.metrics_log \
+            python -m harness.metrics_log append \
               --log reports/metrics_log.jsonl \
               --proc "$proc" \
-              --round "${{ steps.round.outputs.next_round }}" \
+              --round "$ROUND" \
               --evolve-summary "$OUTPUT_DIR/evolve_summary.json"
             echo "::endgroup::"
           done < <(python -m harness.manifest procs/manifest.yaml --tsv)
@@ -132,7 +143,7 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
 
-          echo "Auto-fix after UAT rejection [auto-fix round ${{ steps.round.outputs.next_round }}/3]" > /tmp/commit_message.txt
+          echo "Auto-fix after UAT rejection" > /tmp/commit_message.txt
 
           while IFS=$'\t' read -r proc suite exec_stmt schema; do
             if git diff --quiet -- "$proc"; then
@@ -140,9 +151,10 @@ jobs:
             fi
             git add "$proc"
             OUTPUT_DIR="reports/$(basename "$proc" .sql)"
+            ROUND="$(cat "$OUTPUT_DIR/auto_fix_round.txt" 2>/dev/null || echo '?')"
             {
               echo ""
-              echo "## $proc"
+              echo "## $proc [auto-fix round $ROUND/3]"
               echo "LLM-generated fix via evolve_cli.py --provider deepseek -- not reviewed by a human before landing on dev (by design; that happens at the uat -> main PR). Rationale from the LLM:"
               echo ""
               python -m harness.rationale_cli "$OUTPUT_DIR/evolve_summary.json"

@@ -11,22 +11,10 @@ doesn't exist yet. This log format is what one would read from, if/when that's
 actually warranted.
 """
 import argparse
-import json
 import sys
 from collections import defaultdict
-from pathlib import Path
 
-
-def load_entries(path) -> list[dict]:
-    path = Path(path)
-    if not path.exists():
-        return []
-    entries = []
-    for line in path.read_text(encoding="utf-8").splitlines():
-        line = line.strip()
-        if line:
-            entries.append(json.loads(line))
-    return entries
+from harness.metrics_log import load_entries  # noqa: F401 -- re-exported for backward compatibility
 
 
 def summarize(entries: list[dict]) -> dict:
