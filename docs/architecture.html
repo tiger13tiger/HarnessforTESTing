@@ -204,7 +204,7 @@ footer {
   <section>
     <h2>Figure 1</h2>
     <div class="section-title">The promotion pipeline: dev → uat → main</div>
-    <p class="lead">Three Azure SQL databases, three git branches, two gates. One gate is a script; the other is a person. That's the entire safety model.</p>
+    <p class="lead">Three Azure SQL databases, three git branches, two gates. One gate is a script; the other is a person — and, as of this review, a GitHub ruleset that actually enforces it (verified by pushing straight to <code>main</code> and watching it get rejected), not just convention. An unconditional test suite (Fig. 1 below the pipeline) watches all three branches regardless of which gate is in play.</p>
 
     <div class="legend">
       <span><span class="swatch" style="background:var(--accent)"></span>automated</span>
@@ -272,7 +272,7 @@ footer {
 
           <!-- gate1 fail: auto-fix-and-retry job loops back to dev -->
           <path d="M 400 230 L 400 302 Q 400 314 388 314 L 172 314 Q 160 314 160 302 L 160 230" fill="none" stroke="var(--bad)" stroke-width="1.2" stroke-dasharray="4 3" marker-end="url(#arrowBad)"/>
-          <text x="280" y="330" text-anchor="middle" font-size="10" fill="var(--bad)">3 — on fail: LLM auto-fix in dev, re-triggers (≤3 rounds, then stops for a human)</text>
+          <text x="280" y="330" text-anchor="middle" font-size="10" fill="var(--bad)">3 — on fail: LLM auto-fix in dev, re-triggers (≤3 rounds per procedure, then stops for a human)</text>
 
           <!-- UAT zone -->
           <rect x="630" y="20" width="220" height="50" rx="4" fill="var(--surface-2)" stroke="var(--border)"/>
@@ -312,7 +312,7 @@ footer {
           <text x="930" y="240" text-anchor="middle" font-size="10" fill="var(--good)">4 — pass: uat confirmed ready</text>
 
           <path d="M 740 302 L 740 400 Q 740 412 728 412 L 232 412 Q 220 412 220 400 L 220 232" fill="none" stroke="var(--bad)" stroke-width="1.2" stroke-dasharray="4 3" marker-end="url(#arrowBad)"/>
-          <text x="480" y="428" text-anchor="middle" font-size="10" fill="var(--bad)">5 — on fail: same auto-fix loop, back to dev (shares the ≤3-round budget with loop 3)</text>
+          <text x="480" y="428" text-anchor="middle" font-size="10" fill="var(--bad)">5 — on fail: same auto-fix loop, back to dev (same per-procedure cap as loop 3, not shared)</text>
 
           <!-- MAIN zone -->
           <rect x="1225" y="165" width="220" height="50" rx="4" fill="var(--surface)" stroke="var(--highlight)" stroke-width="1.3"/>
@@ -325,14 +325,26 @@ footer {
           <text x="1335" y="296" text-anchor="middle" font-size="10.5" opacity="0.75" fill="var(--fg-muted)">deploy — not automated</text>
         </svg>
       </div>
-      <figcaption>Fig. 1 — <code>dev</code> and <code>uat</code> each sit next to their own Azure SQL database. Gate 1 is a GitHub Action with no human in the loop, and it doesn't stop at a clean merge: a second job re-validates the <em>actual merged</em> <code>uat</code> state right after. Either validation failing — the candidate before merge, or the merged state after — calls the same reusable auto-fix workflow, which sends the problem back to an LLM against <code>dev</code> and pushes a fix, re-triggering Gate 1 fresh. Both failure points share one 3-round budget, win or lose. Only a clean post-merge validation marks <code>uat</code> ready — a human still has to open and merge the Gate 2 pull request. <code>main</code> stands for "promoted to prd," but nothing here actually deploys to the real Synapse warehouse — that step is still the existing release process.</figcaption>
+      <figcaption>Fig. 1 — <code>dev</code> and <code>uat</code> each sit next to their own Azure SQL database. Gate 1 is a GitHub Action with no human in the loop, and it doesn't stop at a clean merge: a second job re-validates the <em>actual merged</em> <code>uat</code> state right after. Either validation failing — the candidate before merge, or the merged state after — calls the same reusable auto-fix workflow, which sends the problem back to an LLM against <code>dev</code> and pushes a fix, re-triggering Gate 1 fresh. Both failure points use the same cap, computed per procedure from <code>reports/metrics_log.jsonl</code> — not one counter shared across the whole manifest. Only a clean post-merge validation marks <code>uat</code> ready — a human still has to open and merge the Gate 2 pull request, which a branch-protection ruleset on <code>main</code> now actually requires rather than leaving to convention. <code>main</code> stands for "promoted to prd," but nothing here actually deploys to the real Synapse warehouse — that step is still the existing release process. <code>tests.yml</code> (band below) runs the full unit suite on every push to any of the three branches and every PR, independent of which gate above is active.</figcaption>
+    </figure>
+
+    <figure>
+      <div class="diagram-frame">
+        <svg viewBox="0 0 1500 110" role="img" aria-label="tests.yml runs the full unit suite on every push to dev, uat, or main, and every pull request into main, with no path filter -- unlike the two gates above, which only run when procs or tests files change.">
+          <rect x="50" y="10" width="1395" height="70" rx="6" fill="none" stroke="var(--good)" stroke-width="1.3" stroke-dasharray="5 4"/>
+          <text x="80" y="38" font-family="var(--font-mono)" font-size="12.5" font-weight="600" fill="var(--good)">tests.yml</text>
+          <text x="80" y="58" font-size="11" fill="var(--fg)">Full unit suite on every push to dev / uat / main and every PR — no path filter, unlike Gate 1 or Gate 2 above.</text>
+          <text x="80" y="73" font-size="10" fill="var(--fg-muted)">Added after a 900-line, 22-file change reached main with zero CI coverage because it touched no procs/**.sql or tests/**.yaml file.</text>
+        </svg>
+      </div>
+      <figcaption>Fig. 1b — the safety net neither gate above provides on its own: cheap enough to run unconditionally, since <code>pyodbc</code> is imported lazily and the suite needs no live database or ODBC driver.</figcaption>
     </figure>
 
     <ul class="explain">
       <li class="auto"><strong>promote-dev-to-uat.yml: promote job</strong>Fires on every push to <code>dev</code> that touches <code>procs/**.sql</code> or <code>tests/**.yaml</code>. Loops over every entry in <code>procs/manifest.yaml</code> (<code>harness/manifest.py</code>) — not just one hardcoded procedure — deploying each to UAT inside its own transaction and running its validation suite, continuing past a failure to surface every broken procedure in one run. Only on a clean pass for <em>every</em> entry does it merge <code>dev</code> into <code>uat</code> and push.</li>
       <li class="bad"><strong>promote-dev-to-uat.yml: validate-after-merge job</strong>Runs only once <code>promote</code> succeeds, i.e. only after the merge actually landed. Re-deploys and re-validates every manifest entry against UAT using <code>uat</code>'s own branch state — catches a merge-specific surprise (an odd conflict resolution, a database that drifted between the two checks) that validating the candidates alone, a moment earlier, couldn't see.</li>
       <li class="bad"><strong>auto-fix-dev.yml (reusable)</strong>Called by whichever of the two jobs above failed. First runs <code>harness/governance_check.py</code> as a fail-fast CI step — but the real enforcement is one layer deeper: <code>DeepSeekLLMClient.__init__</code> itself refuses to construct unless <code>infra/deepseek_governance_approval.yaml</code> has a real, filled-in sign-off, since DeepSeek is a China-based provider. That means a local run of <code>evolve_cli.py --provider deepseek</code>, or any future workflow that constructs this client, is blocked the same way — not just this one step's ordering. Then loops over the manifest; for each failing procedure, <code>harness/metrics_log.py</code>'s <code>next_round_for_proc()</code> reads <code>reports/metrics_log.jsonl</code> for that procedure's own consecutive-failure count — each procedure has its own round number, not one shared across the manifest — and a procedure past round 3 is skipped (loudly, with its own <code>::error::</code>) without blocking any other procedure's attempt. Procedures still in budget go to <code>harness/evolve_cli.py --provider deepseek</code> against <code>dev</code> (the same fix loop as Fig. 2), logging every attempt — converged or not — back to that same log (read by <code>harness/metrics_cli.py</code> for a success-rate/cost trend). Whatever converges gets committed with a per-procedure <code>[auto-fix round N/3]</code> tag (rationale rendered via <code>harness/rationale_cli.py</code>) — which re-triggers <code>promote-dev-to-uat.yml</code> from the top — even if other procedures in the same run didn't. This push uses a PAT, not the default token — a default-token push can't re-trigger a workflow, which would otherwise make this whole loop silently inert.</li>
-      <li class="human"><strong>uat-to-prd-gate.yml</strong>Fires on a pull request into <code>main</code>. Re-validates against UAT as a required check so the reviewer sees current pass/fail before deciding — but merging is always a person's click, never automatic. It also scans the PR's commits for an <code>[auto-fix round</code> tag and posts a comment flagging any LLM-generated fix, with its rationale, so the reviewer knows which commits weren't human-authored before they ever reached this PR.</li>
+      <li class="human"><strong>uat-to-prd-gate.yml</strong>Fires on every pull request into <code>main</code> — no path filter, unlike the other gates, because its <code>validate</code> job is a required branch-protection status check: a required check gated by a path filter never reports anything, and never stops being "pending," on a PR that doesn't touch that path. A git-diff step inside the job decides whether there's actually anything to validate — a real <code>procs/**.sql</code>/<code>tests/**.yaml</code> change re-validates against UAT for real; anything else (docs, workflow files, pure <code>harness/**.py</code>) passes on "nothing to validate" instead of leaving the reviewer's merge button stuck waiting forever. Either way it scans the PR's commits for an <code>[auto-fix round</code> tag and posts a comment flagging any LLM-generated fix, with its rationale — merging itself is still always a person's click, never automatic.</li>
       <li class="good"><strong>tests.yml</strong>Runs the full unit suite on every push to <code>dev</code>/<code>uat</code>/<code>main</code> and every PR into <code>main</code> — no path filter, unlike the two gates above. Cheap enough to run unconditionally: <code>pyodbc</code> is imported lazily inside <code>connector.py</code>'s methods, so the suite needs no ODBC driver installed. Exists because a code-only change to <code>harness/**.py</code> (no <code>procs/**.sql</code> or <code>tests/**.yaml</code> touched) used to skip both gates' pytest step entirely and reach <code>main</code> with zero automated coverage.</li>
       <li class="bad"><strong>Where this stops</strong>Nothing past <code>main</code> is built yet. Getting a merged change into the actual production Synapse warehouse is still whatever your team's release process already is.</li>
     </ul>
@@ -548,7 +560,7 @@ PROCESS.md  <span class="comment"># what "healthy" means for this pipeline — r
       </div>
       <div class="status-card">
         <span class="tag good">verified</span>
-        <p>111 unit tests, including planted-defect cases proving each check catches what it claims to, plus regression tests for every bug found this way — with a mock LLM and mock connector, no live credentials needed. <code>tests.yml</code> now runs them on every push/PR with no path filter — previously <code>promote-dev-to-uat.yml</code>'s own pytest step only fired on <code>procs/**.sql</code>/<code>tests/**.yaml</code>, so a 900-line, 22-file commit that was pure <code>harness/**.py</code> + workflow changes landed on <code>main</code> with zero CI coverage, caught only because pytest happened to be run locally first.</p>
+        <p>122 unit tests, including planted-defect cases proving each check catches what it claims to, plus regression tests for every bug found this way — with a mock LLM and mock connector, no live credentials needed. <code>tests.yml</code> now runs them on every push/PR with no path filter — previously <code>promote-dev-to-uat.yml</code>'s own pytest step only fired on <code>procs/**.sql</code>/<code>tests/**.yaml</code>, so a 900-line, 22-file commit that was pure <code>harness/**.py</code> + workflow changes landed on <code>main</code> with zero CI coverage, caught only because pytest happened to be run locally first.</p>
       </div>
       <div class="status-card">
         <span class="tag bad">worth noting</span>
@@ -563,12 +575,20 @@ PROCESS.md  <span class="comment"># what "healthy" means for this pipeline — r
         <p>DeepSeek usage is blocked at the actual call site now: <code>DeepSeekLLMClient.__init__</code> (<code>harness/llm_client.py</code>) refuses to construct unless <code>infra/deepseek_governance_approval.yaml</code> carries a real sign-off — not just <code>auto-fix-dev.yml</code>'s CI step, which was the only thing enforcing it until this review caught that nothing stopped a local run or a different workflow from skipping straight to the client. It does <strong>not</strong> mean the actual data-governance approval has happened; that's still a real decision someone has to make and record.</p>
       </div>
       <div class="status-card">
+        <span class="tag good">verified</span>
+        <p><code>main</code> now has a branch-protection ruleset requiring a pull request and a passing <code>validate</code> check — confirmed by actually pushing straight to <code>main</code> twice: once with the ruleset <code>Disabled</code> (the push succeeded, exposing that the first setup attempt hadn't taken), once with it <code>Active</code> (GitHub rejected it: <code>GH013: Repository rule violations</code>, naming both the missing PR and the missing status check). The gate in Fig. 1 is enforced now, not just convention.</p>
+      </div>
+      <div class="status-card">
+        <span class="tag good">verified</span>
+        <p>Turning on that branch-protection rule immediately surfaced a real bug, hit live on a real PR: requiring <code>validate</code> while <code>uat-to-prd-gate.yml</code> was still path-filtered to <code>procs/**.sql</code>/<code>tests/**.yaml</code> meant a docs-only PR could never satisfy it — the check had nothing to run, so it sat as "Expected — waiting for status to be reported" forever, with no way to merge. Fixed by removing the workflow's path filter and moving the condition inside the job: a git-diff check decides whether to actually re-validate or just report "nothing to validate," but the job itself — and the required check — always completes.</p>
+      </div>
+      <div class="status-card">
         <span class="tag bad">not yet real</span>
         <p>Every procedure and golden figure so far is synthetic — generated test data, not a real company stored procedure or a number a business user actually checked.</p>
       </div>
       <div class="status-card">
         <span class="tag bad">not yet real</span>
-        <p>Validated against Azure SQL Database, not an actual Synapse dedicated/serverless pool. No branch protection enforces the human gate on <code>main</code> yet — it's convention, not a rule GitHub blocks you from breaking; no tool available to this harness can set that, it's a manual Settings → Branches step.</p>
+        <p>Validated against Azure SQL Database, not an actual Synapse dedicated/serverless pool — and only ever exercised against a single real procedure. The multi-procedure manifest and per-procedure round cap are unit-tested and hand-simulated, never proven against two or more real procedures in live CI.</p>
       </div>
     </div>
   </section>
