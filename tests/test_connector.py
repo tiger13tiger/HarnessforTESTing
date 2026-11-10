@@ -1,7 +1,31 @@
 """Tests open_transaction_with_retries in isolation -- no real Synapse connection."""
 import pytest
 
-from harness.connector import TransientError, _is_transient, open_transaction_with_retries
+from harness.connector import TransientError, _is_transient, open_transaction_with_retries, redact_secret
+
+
+def test_redact_secret_strips_the_whole_connection_string():
+    conn_str = "Driver={ODBC Driver 18};Server=x;Database=y;UID=u;PWD=hunter2"
+    text = f"login failed, conn={conn_str}"
+    assert conn_str not in redact_secret(text, conn_str)
+    assert "***REDACTED-CONN-STR***" in redact_secret(text, conn_str)
+
+
+def test_redact_secret_strips_just_the_password_if_echoed_alone():
+    conn_str = "Driver={ODBC Driver 18};Server=x;Database=y;UID=u;PWD=hunter2"
+    text = "authentication failed for password hunter2"
+    redacted = redact_secret(text, conn_str)
+    assert "hunter2" not in redacted
+    assert "***REDACTED-PWD***" in redacted
+
+
+def test_redact_secret_is_a_no_op_with_no_secrets_present():
+    text = "some unrelated error"
+    assert redact_secret(text, None) == text
+
+
+def test_redact_secret_handles_empty_text():
+    assert redact_secret("", "Driver=x;PWD=hunter2") == ""
 
 
 def test_classifies_azure_serverless_resume_error_as_transient():

@@ -36,13 +36,66 @@ def entry_from_evolve_summary(proc: str, round_number: int, summary: dict) -> di
     }
 
 
+def load_entries(path) -> list[dict]:
+    path = Path(path)
+    if not path.exists():
+        return []
+    entries = []
+    for line in path.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if line:
+            entries.append(json.loads(line))
+    return entries
+
+
+def next_round_for_proc(path, proc: str) -> int:
+    """How many consecutive auto-fix rounds have failed for THIS procedure,
+    plus one -- i.e. the round number the next attempt would be.
+
+    Reads reports/metrics_log.jsonl instead of the previous approach (parsing
+    a "[auto-fix round N/3]" tag off the single latest commit on dev): that
+    older scheme used one counter shared across every procedure in the
+    manifest, so with more than one real procedure, one proc's progress could
+    reset or corrupt another's. This walks backward through just this proc's
+    own entries (skipping other procs' interleaved ones) and stops at the
+    first recorded success, or the start of the log if there isn't one.
+
+    Deliberately does NOT reset just because a human pushed an unrelated
+    commit to dev -- that was the old scheme's behavior, and it was a bug,
+    not a feature: it let a capped, still-broken procedure quietly get more
+    attempts just because someone touched an unrelated file. The only things
+    that reset this count are a logged auto-fix success for this proc, or no
+    history for it at all yet.
+    """
+    round_count = 0
+    for entry in reversed(load_entries(path)):
+        if entry.get("proc") != proc:
+            continue
+        if entry.get("success"):
+            break
+        round_count += 1
+    return round_count + 1
+
+
 def main(argv=None) -> int:
-    parser = argparse.ArgumentParser(description="Append one auto-fix attempt to the metrics log")
-    parser.add_argument("--log", required=True, help="path to the metrics_log.jsonl file")
-    parser.add_argument("--proc", required=True, help="path to the procedure file this attempt was for")
-    parser.add_argument("--round", required=True, type=int, help="the auto-fix round number this attempt was")
-    parser.add_argument("--evolve-summary", required=True, help="path to the evolve_summary.json this attempt wrote")
+    parser = argparse.ArgumentParser(description="Record and query the auto-fix attempt log")
+    subparsers = parser.add_subparsers(dest="command", required=True)
+
+    append_parser = subparsers.add_parser("append", help="append one auto-fix attempt to the log")
+    append_parser.add_argument("--log", required=True, help="path to the metrics_log.jsonl file")
+    append_parser.add_argument("--proc", required=True, help="path to the procedure file this attempt was for")
+    append_parser.add_argument("--round", required=True, type=int, help="the auto-fix round number this attempt was")
+    append_parser.add_argument("--evolve-summary", required=True, help="path to the evolve_summary.json this attempt wrote")
+
+    next_round_parser = subparsers.add_parser("next-round", help="print the next round number for a procedure")
+    next_round_parser.add_argument("--log", required=True, help="path to the metrics_log.jsonl file")
+    next_round_parser.add_argument("--proc", required=True, help="path to the procedure file to check")
+
     args = parser.parse_args(argv)
+
+    if args.command == "next-round":
+        print(next_round_for_proc(args.log, args.proc))
+        return 0
 
     try:
         summary = json.loads(Path(args.evolve_summary).read_text(encoding="utf-8"))

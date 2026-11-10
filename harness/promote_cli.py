@@ -15,7 +15,7 @@ import sys
 from pathlib import Path
 
 from harness.config import load_suite
-from harness.connector import SynapseConnector, TransientError
+from harness.connector import SynapseConnector, TransientError, redact_secret
 from harness.guardrails import GuardrailViolation
 from harness.promote import promote
 from harness.report import write_reports
@@ -34,6 +34,7 @@ def main(argv=None) -> int:
     sql = Path(args.proc).read_text(encoding="utf-8")
     suite = load_suite(args.suite)
 
+    connector = None
     try:
         connector = SynapseConnector(env_var=args.conn_env)
     except RuntimeError as exc:
@@ -46,12 +47,14 @@ def main(argv=None) -> int:
         print(f"error: {exc}", file=sys.stderr)
         return 1
     except TransientError as exc:
-        print(f"error: connection kept failing after retries: {exc}", file=sys.stderr)
+        conn_str = getattr(connector, "conn_str", None)
+        print(f"error: connection kept failing after retries: {redact_secret(str(exc), conn_str)}", file=sys.stderr)
         return 1
     except Exception as exc:  # noqa: BLE001 - promote() re-raises a real deploy/exec failure
         # (not a transient one) on purpose, since there's no LLM here to retry a fix with;
         # this is the CLI boundary, so report it cleanly instead of a raw traceback
-        print(f"error: deploy/validate failed: {type(exc).__name__}: {exc}", file=sys.stderr)
+        conn_str = getattr(connector, "conn_str", None)
+        print(f"error: deploy/validate failed: {type(exc).__name__}: {redact_secret(str(exc), conn_str)}", file=sys.stderr)
         return 1
 
     summary = write_reports(results, suite["suite"], suite["version"], args.output_dir)

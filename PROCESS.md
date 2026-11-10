@@ -20,7 +20,8 @@ uat (merged)  --(promote-dev-to-uat.yml "validate-after-merge" job)-->  uat (con
                     | either job can fail --> auto-fix-dev.yml (reusable):
                     | sends the failure back to an LLM against dev, pushes
                     | a fix, re-triggers promote-dev-to-uat.yml from the
-                    | top (max 3 rounds total, shared by both jobs)
+                    | top (max 3 rounds per procedure, tracked separately
+                    | for each entry in procs/manifest.yaml)
                     v
                    dev
 uat (confirmed ready)  --(a reviewed pull request, gated by uat-to-prd-gate.yml)-->  main
@@ -76,13 +77,15 @@ never a PR from `dev` or any other branch.
   looked at the diff before it moved further (fine to land unreviewed on
   `dev` itself — that's the design — but it should get a human look before
   `uat -> main`).
-- `auto-fix-dev.yml` hitting its 3-round cap (an `::error::` from its
-  "Determine round number" step, with no further commits following it) and
-  nobody looking at why the LLM couldn't converge — this is the one case in
-  the dev -> uat step that's supposed to stop and wait for a human instead
-  of resolving itself. The cap is shared: it can be reached from either
-  `promote` failing or `validate-after-merge` failing, so check which one
-  triggered it.
+- `auto-fix-dev.yml` hitting a procedure's 3-round cap (an `::error::`
+  naming that specific procedure in its "Ask the LLM" step, with no further
+  commits touching that procedure's file following it) and nobody looking
+  at why the LLM couldn't converge — this is the one case in the dev -> uat
+  step that's supposed to stop and wait for a human instead of resolving
+  itself. The cap is per-procedure (`harness/metrics_log.py`'s
+  `next_round_for_proc()`, reading that procedure's own entries in
+  `reports/metrics_log.jsonl`) — one procedure hitting its cap doesn't stop
+  any other procedure in the manifest from still getting retried.
 - A `[auto-fix round N/3]` commit on `dev` that changes nothing at all —
   not even `reports/metrics_log.jsonl` — would indicate the no-op guard in
   that job's push step isn't doing what it's supposed to. (A round where
@@ -120,3 +123,17 @@ check do it) rather than editing history.
   confirmed two independent ways — a manual fix, and separately via
   `harness/evolve_cli.py --provider deepseek` converging on a working fix
   in 2 iterations.
+- 2026-11-10: A fresh review of the whole pipeline (not tied to a specific
+  bug report) found and fixed seven real issues: the governance gate wasn't
+  code-enforced (now `DeepSeekLLMClient.__init__` itself refuses to
+  construct when unapproved); `tests.yml` closes a CI coverage hole where a
+  `harness/**.py`-only change skipped both gates' pytest step entirely; a
+  reproducible `IndentationError` in the rationale-rendering step (fixed by
+  extracting `harness/rationale_cli.py`); `concurrency:` groups added to
+  all four workflows; the `[auto-fix round N/3]` cap moved from one counter
+  shared across the manifest to a per-procedure count
+  (`next_round_for_proc()`, verified by hand-simulating a 4-round run
+  against two procedures); exception text now gets scrubbed
+  (`redact_secret()`) before it's printed to a public Actions log; removed
+  an orphaned `procs/sp_refresh_fact_sales.buggy_example.sql`. 122 tests,
+  all green.
