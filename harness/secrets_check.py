@@ -12,10 +12,22 @@ nothing here deploys, pushes, or spends a real LLM call.
 """
 import os
 import sys
+import time
 
 import requests
 
-from harness.connector import SynapseConnector
+from harness.connector import SynapseConnector, TransientError
+
+# A serverless Azure SQL database that's been idle overnight routinely needs
+# a few seconds to resume on first contact -- harness/connector.py already
+# retries this exact error class (TRANSIENT_AZURE_ERROR_NUMBERS, e.g. 40613)
+# around transaction() for the real pipeline. This check used to call
+# query() once with no retry at all, so the nightly schedule reported a
+# healthy secret as "FAIL" every time it happened to catch the database
+# mid-resume -- indistinguishable, in the log, from an actually-stale
+# connection string.
+SYNAPSE_QUERY_RETRIES = 3
+SYNAPSE_QUERY_MAX_BACKOFF = 10
 
 
 def check_synapse(env_var: str) -> tuple[bool, str]:
@@ -23,11 +35,18 @@ def check_synapse(env_var: str) -> tuple[bool, str]:
         connector = SynapseConnector(env_var=env_var)
     except RuntimeError as exc:
         return False, str(exc)
-    try:
-        connector.query("SELECT 1 AS ok")
-    except Exception as exc:  # noqa: BLE001 - any failure here is a finding to report, not a crash
-        return False, f"{type(exc).__name__}: {exc}"
-    return True, "connected and queried successfully"
+    last_exc: TransientError | None = None
+    for attempt in range(SYNAPSE_QUERY_RETRIES + 1):
+        try:
+            connector.query("SELECT 1 AS ok")
+            return True, "connected and queried successfully"
+        except TransientError as exc:
+            last_exc = exc
+            if attempt < SYNAPSE_QUERY_RETRIES:
+                time.sleep(min(2 ** (attempt + 1), SYNAPSE_QUERY_MAX_BACKOFF))
+        except Exception as exc:  # noqa: BLE001 - a non-transient failure is a real finding, not a crash
+            return False, f"{type(exc).__name__}: {exc}"
+    return False, f"TransientError (gave up after {SYNAPSE_QUERY_RETRIES} retries): {last_exc}"
 
 
 def check_deepseek() -> tuple[bool, str]:

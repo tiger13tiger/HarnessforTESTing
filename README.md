@@ -352,6 +352,13 @@ should show up here in under a minute, not mid-pipeline hours later. It
 also runs daily on its own, in case something goes stale on its own (e.g.
 a certificate or token expiring) without anyone touching Settings at all.
 
+The Synapse checks retry a transient Azure error (serverless database
+waking up from auto-pause, throttling, a login timeout — the same error
+class `harness/connector.py` already retries around a real deploy) a few
+times before reporting failure, so a cold-start blip on the nightly
+schedule doesn't get misreported as a broken secret. A `FAIL` here means
+the retries were exhausted, not that the first attempt hiccuped.
+
 Run it locally too, against your own exported env vars, before ever
 pushing a secret to GitHub:
 

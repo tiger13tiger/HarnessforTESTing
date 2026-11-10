@@ -1,6 +1,7 @@
 """Tests harness/secrets_check.py's pass/fail logic with the network and the
 database mocked out -- no real credentials needed to run these."""
 from harness import secrets_check
+from harness.connector import TransientError
 
 
 class _FakeConnector:
@@ -22,6 +23,30 @@ class _FailingQueryConnector:
 
     def query(self, sql, params=None):
         raise RuntimeError("login failed")
+
+
+class _ResumingThenHealthyConnector:
+    """Fails with the exact shape of a serverless database waking up from
+    auto-pause on its first two attempts, then succeeds -- the real-world
+    case this retry exists for."""
+
+    def __init__(self, env_var):
+        self.calls = 0
+
+    def query(self, sql, params=None):
+        self.calls += 1
+        if self.calls <= 2:
+            raise TransientError("database is not currently available (40613)")
+        return [{"ok": 1}]
+
+
+class _AlwaysResumingConnector:
+    def __init__(self, env_var):
+        self.calls = 0
+
+    def query(self, sql, params=None):
+        self.calls += 1
+        raise TransientError("database is not currently available (40613)")
 
 
 class _FakeResponse:
@@ -54,6 +79,25 @@ def test_check_synapse_fails_when_query_raises(monkeypatch):
     ok, message = secrets_check.check_synapse("SYNAPSE_DEV_CONN_STR")
     assert not ok
     assert "login failed" in message
+
+
+def test_check_synapse_retries_a_transient_error_and_then_succeeds(monkeypatch):
+    # caught by a real nightly run: a serverless database resuming from
+    # auto-pause failed the first two attempts, then came up fine
+    monkeypatch.setattr(secrets_check, "SynapseConnector", _ResumingThenHealthyConnector)
+    monkeypatch.setattr(secrets_check.time, "sleep", lambda _seconds: None)
+    ok, message = secrets_check.check_synapse("SYNAPSE_DEV_CONN_STR")
+    assert ok
+    assert "success" in message.lower()
+
+
+def test_check_synapse_gives_up_and_reports_failure_after_exhausting_retries(monkeypatch):
+    monkeypatch.setattr(secrets_check, "SynapseConnector", _AlwaysResumingConnector)
+    monkeypatch.setattr(secrets_check.time, "sleep", lambda _seconds: None)
+    ok, message = secrets_check.check_synapse("SYNAPSE_DEV_CONN_STR")
+    assert not ok
+    assert "gave up after" in message
+    assert "40613" in message
 
 
 def test_check_deepseek_fails_without_key(monkeypatch):
