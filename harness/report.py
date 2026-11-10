@@ -79,6 +79,19 @@ def _closest_iteration(history):
     return min(candidates, key=lambda it: sum(1 for r in it.results if r.status != "pass"))
 
 
+def _final_fix_rationale(success: bool, history) -> str | None:
+    """The LLM's own explanation for the candidate that actually passed -- that
+    rationale lives on the iteration BEFORE the last one (evolve() attaches it to
+    the failing attempt that prompted the fix, not to the fix itself). None if the
+    loop failed outright, or if the very first attempt already passed (no fix was
+    ever requested). Surfaced in the commit message an auto-fix push makes, so a
+    human reviewing the eventual uat -> main PR sees why an LLM changed what it
+    changed, not just the final diff."""
+    if not success or len(history) < 2:
+        return None
+    return history[-2].rationale
+
+
 def write_evolve_report(success: bool, history, output_dir) -> dict:
     """Writes evolve_report.md / evolve_summary.json for the auto-fix loop in harness/evolve.py."""
     output_dir = Path(output_dir)
@@ -129,6 +142,7 @@ def write_evolve_report(success: bool, history, output_dir) -> dict:
         "success": success,
         "iterations": len(history),
         "closest_attempt": closest.attempt if closest is not None else None,
+        "rationale": _final_fix_rationale(success, history),
     }
     (output_dir / "evolve_summary.json").write_text(json.dumps(summary, indent=2, ensure_ascii=False), encoding="utf-8")
     return summary

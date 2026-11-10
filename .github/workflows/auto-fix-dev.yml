@@ -98,6 +98,19 @@ jobs:
             echo "No change produced by the LLM; nothing to push."
             exit 0
           fi
+          RATIONALE="$(python3 -c "
+          import json
+          try:
+              with open('reports/evolve_summary.json') as f:
+                  data = json.load(f)
+              print(data.get('rationale') or '(no rationale recorded by evolve_cli.py for this run)')
+          except FileNotFoundError:
+              print('(reports/evolve_summary.json not found)')
+          ")"
           git add procs/sp_refresh_fact_sales.example.sql
-          git commit -m "Auto-fix after UAT rejection [auto-fix round ${{ steps.round.outputs.next_round }}/3]"
+          git commit \
+            -m "Auto-fix after UAT rejection [auto-fix round ${{ steps.round.outputs.next_round }}/3]" \
+            -m "LLM-generated fix via evolve_cli.py --provider deepseek -- not reviewed by a human before landing on dev (by design; that happens at the uat -> main PR). Rationale from the LLM:" \
+            -m "$RATIONALE" \
+            -m "Full iteration history: the auto-fix-report artifact on this workflow run."
           git push origin HEAD:dev

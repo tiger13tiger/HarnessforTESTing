@@ -254,7 +254,11 @@ instead of just leaving things broken:
    the next round's tag and pushes to `dev` — which re-triggers
    `promote-dev-to-uat.yml` from the top, naturally retrying the whole dev
    → uat cycle (including a fresh `validate-after-merge` once it re-merges).
-   If `evolve_cli.py` doesn't converge (exhausts its own internal
+   The commit message carries the LLM's own rationale for the fix, not
+   just the round tag — pulled from `reports/evolve_summary.json` — so it
+   travels with `git log` into whatever `uat → main` PR eventually picks
+   it up, instead of living only in a CI artifact that expires. If
+   `evolve_cli.py` doesn't converge (exhausts its own internal
    attempts), that step fails and the job stops there with no commit.
    `uat` is never reverted when this happens — the next successful merge
    simply supersedes it, same as any other `TRUNCATE`/`INSERT` refresh.
@@ -281,6 +285,34 @@ person. `.github/workflows/uat-to-prd-gate.yml` re-validates against UAT as
 a required check on that PR, but merging is a human decision — this
 workflow never merges anything. This is where your test analyst's sign-off
 actually happens.
+
+That same workflow also scans the PR's commits for an `[auto-fix round`
+tag and posts a comment flagging any commit that was LLM-generated rather
+than human-written, quoting its full rationale — a reviewer shouldn't have
+to dig through `git log` to find out whether a given diff came from a
+person or from `evolve_cli.py`. It upserts one comment (keyed by an HTML
+marker) instead of spamming a new one on every push to the PR branch.
+
+## Keeping the pipeline's own secrets honest
+
+`.github/workflows/secrets-smoke-test.yml` confirms the four secrets this
+pipeline depends on — `SYNAPSE_DEV_CONN_STR`, `SYNAPSE_UAT_CONN_STR`,
+`DEEPSEEK_API_KEY`, `GH_PAT` — actually authenticate, not just that
+they're set. Each check is read-only (a trivial `SELECT 1`, a `GET`
+request); nothing deploys, pushes, or spends a real LLM call. Run it by
+hand (Actions tab → this workflow → "Run workflow") right after touching
+any of these in Settings → Secrets — a stale password or an empty token
+should show up here in under a minute, not mid-pipeline hours later. It
+also runs daily on its own, in case something goes stale on its own (e.g.
+a certificate or token expiring) without anyone touching Settings at all.
+
+Run it locally too, against your own exported env vars, before ever
+pushing a secret to GitHub:
+
+```bash
+SYNAPSE_DEV_CONN_STR="..." SYNAPSE_UAT_CONN_STR="..." DEEPSEEK_API_KEY="..." GH_PAT="..." \
+    python -m harness.secrets_check
+```
 
 ## Adding a check
 
