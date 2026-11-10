@@ -530,11 +530,19 @@ PROCESS.md  <span class="comment"># what "healthy" means for this pipeline — r
     <div class="status-grid">
       <div class="status-card">
         <span class="tag good">verified</span>
-        <p>Both diagrams above ran for real against live Azure SQL (dev + uat). A manual fix and <code>evolve_cli.py --provider deepseek</code> independently converged on working fixes for the same planted bug.</p>
+        <p>The full closed loop in Fig. 1 ran for real in CI, not just locally: a planted bug failed <code>promote</code> against live UAT, <code>auto-fix-and-retry</code> sent it to DeepSeek, the fix (<code>[auto-fix round 1/3]</code>) pushed via a PAT, re-triggered the workflow, passed, merged into <code>uat</code>, and <code>validate-after-merge</code> re-confirmed it — <a href="https://github.com/tiger13tiger/HarnessforTESTing/actions/runs/42726872597">run #13</a>.</p>
       </div>
       <div class="status-card">
         <span class="tag good">verified</span>
-        <p>57+ unit tests, including planted-defect cases proving each check catches what it claims to, with a mock LLM and mock connector — no live credentials needed to run the suite.</p>
+        <p>Getting there took three real bugs found and fixed by that same test: a transient-error classifier that never actually matched Azure's serverless-resume error (40613), a race between the two auto-fix-retry jobs, and a raw traceback instead of a clean error on a permanent connection failure.</p>
+      </div>
+      <div class="status-card">
+        <span class="tag good">verified</span>
+        <p>59 unit tests, including planted-defect cases proving each check catches what it claims to, plus regression tests for the two bugs above — with a mock LLM and mock connector, no live credentials needed.</p>
+      </div>
+      <div class="status-card">
+        <span class="tag bad">worth noting</span>
+        <p>DeepSeek's real fix passed by removing a join rather than de-duplicating it — a different, and arguably more correct, fix than the one originally shipped by hand. It passed because the synthetic seed data can't tell the two approaches apart (every store has ≥1 promotion by construction). An LLM fix passing golden checks doesn't mean it matches the original's exact logic — this is exactly why <code>uat → main</code> stays a human gate.</p>
       </div>
       <div class="status-card">
         <span class="tag bad">not yet real</span>
@@ -547,6 +555,6 @@ PROCESS.md  <span class="comment"># what "healthy" means for this pipeline — r
     </div>
   </section>
 
-  <footer>HarnessforTESTing — tiger13tiger/HarnessforTESTing — current as of main @ 1682886</footer>
+  <footer>HarnessforTESTing — tiger13tiger/HarnessforTESTing — current as of main @ 17578eb</footer>
 
 </div>
