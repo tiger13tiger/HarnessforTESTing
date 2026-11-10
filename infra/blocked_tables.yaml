@@ -1,0 +1,14 @@
+# Tables a candidate stored procedure must never reference, in any form --
+# SELECT, JOIN, INSERT target, anything -- not just as a destructive-
+# operation target (TRUNCATE/DROP is already handled separately in
+# harness/guardrails.py's SCOPED_TABLE_OP_PATTERN check). Matched as a whole
+# word, case-insensitive, schema-qualified or not, anywhere in the candidate
+# SQL -- fail-safe by design: the same policy that already rejects an
+# unqualified TRUNCATE/DROP target rather than assuming it's fine.
+#
+# Empty by default: this repo's example/demo data has no PII-bearing table.
+# Add a table name here the moment a real PII table (customer records, SSNs,
+# account numbers, anything a data-governance review would flag) becomes
+# reachable from any database this harness touches -- a generated fix should
+# never be ABLE to read it, regardless of why it might try to.
+tables: []

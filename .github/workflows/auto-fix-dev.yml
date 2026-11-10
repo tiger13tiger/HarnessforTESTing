@@ -122,6 +122,11 @@ jobs:
               --proc "$proc" \
               --round "$ROUND" \
               --evolve-summary "$OUTPUT_DIR/evolve_summary.json"
+            python -m harness.lessons_log \
+              --log "reports/lessons/$(basename "$proc" .sql).jsonl" \
+              --proc "$proc" \
+              --round "$ROUND" \
+              --evolve-summary "$OUTPUT_DIR/evolve_summary.json"
             echo "::endgroup::"
           done < <(python -m harness.manifest procs/manifest.yaml --tsv)
           exit $FAILED
@@ -146,6 +151,10 @@ jobs:
           echo "Auto-fix after UAT rejection" > /tmp/commit_message.txt
 
           while IFS=$'\t' read -r proc suite exec_stmt schema; do
+            # Staged every round, converged or not -- a lesson is most likely to
+            # be a NEW one on a round that didn't converge, same reasoning as
+            # metrics_log.jsonl being recorded unconditionally below.
+            git add "reports/lessons/$(basename "$proc" .sql).jsonl" 2>/dev/null || true
             if git diff --quiet -- "$proc"; then
               continue
             fi

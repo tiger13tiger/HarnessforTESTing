@@ -353,7 +353,7 @@ footer {
   <section>
     <h2>Figure 2</h2>
     <div class="section-title">Inside one evolve() attempt</div>
-    <p class="lead">This is what runs on <code>dev</code> — by a person, or by <code>evolve_cli.py</code> asking an LLM for a fix. Up to 5 attempts. The transaction boundary and the guardrail-before-deploy order are the two decisions the whole safety story rests on.</p>
+    <p class="lead">This is what runs on <code>dev</code> — by a person, or by <code>evolve_cli.py</code> asking an LLM for a fix. Up to 5 attempts. The transaction boundary and the guardrail-before-deploy order are the two decisions the whole safety story rests on. <code>guardrails.py</code> checks more than it used to: a second statement smuggled in after the procedure's own closing <code>END</code>, and a reference to any table on a PII blocklist, not just TRUNCATE/DROP targets. What's new and not shown as its own box below: right after the LLM responds, its rationale and SQL are scanned for anything that looks like an email/SSN/phone before either is stored anywhere — a leak is withheld, replacing the stored rationale with a placeholder, before it could reach a report or a public commit message. Every round that fails also records a one-line lesson (<code>harness/lessons_log.py</code>, deduped so a repeated failure doesn't spam the log) — a record for a human to read, never fed back into a future prompt automatically; see README.md's "Lessons log" section for why not.</p>
 
     <div class="legend">
       <span><span class="swatch" style="background:var(--accent)"></span>normal path</span>
@@ -514,8 +514,8 @@ footer {
     <h2>Reference</h2>
     <div class="section-title">Where things live</div>
     <div class="tree"><span class="dir">harness/</span>
-  connector.py        <span class="comment"># SynapseConnector, SynapseTransaction, TransientError, retry-on-connect, redact_secret()</span>
-  guardrails.py        <span class="comment"># check_candidate_sql() — the one safety check that runs before any deploy</span>
+  connector.py        <span class="comment"># SynapseConnector, SynapseTransaction, TransientError, retry-on-connect, redact_secret(), MAX_QUERY_ROWS cap</span>
+  guardrails.py        <span class="comment"># check_candidate_sql() before any deploy, contains_likely_leak() on LLM rationale before it's stored</span>
   config.py             <span class="comment"># loads a suite YAML into checks</span>
   runner.py             <span class="comment"># dispatches each check, catches/retries per-check</span>
   report.py             <span class="comment"># report.md / results.csv / summary.json, gate_failed() -- evolve_summary.json also carries the fix's rationale</span>
@@ -529,6 +529,7 @@ footer {
   metrics_cli.py         <span class="comment"># success-rate / cost / per-model summary from that log, run on demand</span>
   governance_check.py    <span class="comment"># the YAML-reading check; also called directly by DeepSeekLLMClient.__init__ (the real enforcement point)</span>
   rationale_cli.py       <span class="comment"># prints an evolve_summary.json's rationale -- a real module, not inline YAML python</span>
+  lessons_log.py          <span class="comment"># per-procedure distinct-failure-pattern log -- a record for a human, never auto-fed back into a prompt</span>
   <span class="dir">checks/</span>               <span class="comment"># the seven check types (table above)</span>
   cli.py · evolve_cli.py · promote_cli.py · benchmark_cli.py
 
@@ -541,7 +542,7 @@ footer {
 
 <span class="dir">procs/</span>  <span class="comment"># candidate stored procedures + manifest.yaml mapping each to its suite</span>
 <span class="dir">tests/</span>  <span class="comment"># golden-value suites, one per procedure</span>
-<span class="dir">infra/</span>  <span class="comment"># azure_sql_setup.sh, generate_seed_data.py, deepseek_governance_approval.yaml</span>
+<span class="dir">infra/</span>  <span class="comment"># azure_sql_setup.sh, generate_seed_data.py, deepseek_governance_approval.yaml, blocked_tables.yaml, guardrail_attacks.yaml</span>
 
 PROCESS.md  <span class="comment"># what "healthy" means for this pipeline — read by the weekly check</span></div>
   </section>
@@ -581,6 +582,14 @@ PROCESS.md  <span class="comment"># what "healthy" means for this pipeline — r
       <div class="status-card">
         <span class="tag good">verified</span>
         <p>Turning on that branch-protection rule immediately surfaced a real bug, hit live on a real PR: requiring <code>validate</code> while <code>uat-to-prd-gate.yml</code> was still path-filtered to <code>procs/**.sql</code>/<code>tests/**.yaml</code> meant a docs-only PR could never satisfy it — the check had nothing to run, so it sat as "Expected — waiting for status to be reported" forever, with no way to merge. Fixed by removing the workflow's path filter and moving the condition inside the job: a git-diff check decides whether to actually re-validate or just report "nothing to validate," but the job itself — and the required check — always completes.</p>
+      </div>
+      <div class="status-card">
+        <span class="tag good">verified</span>
+        <p>Guardrails hardened after comparing against a sibling project (<code>bank-data-agent-eval</code>) built specifically to attack an LLM agent: <code>guardrails.py</code> now catches a second statement smuggled in after a procedure's closing <code>END</code> (the "must start with CREATE OR ALTER PROCEDURE" check alone never saw it), and rejects any reference to a table on a new PII blocklist (<code>infra/blocked_tables.yaml</code>, empty by default). A fix's rationale and SQL are scanned for an email/SSN/phone shape and withheld — not just logged — before either could reach a report or a commit message. <code>infra/guardrail_attacks.yaml</code> + <code>tests/test_guardrail_attacks.py</code> is this project's first adversarial test suite: 13 catalogued attack payloads, each asserted caught, where there were previously zero.</p>
+      </div>
+      <div class="status-card">
+        <span class="tag bad">worth noting</span>
+        <p>The attack catalog proves the guardrail catches each payload when fed to it directly — it does not prove a real LLM would never find some different way to construct a candidate that evades them, the way <code>bank-data-agent-eval</code>'s harness actually runs its attacks <em>through</em> a live model and measures what got past it. This repo has no equivalent of that live-agent attack loop yet.</p>
       </div>
       <div class="status-card">
         <span class="tag bad">not yet real</span>

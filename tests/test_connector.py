@@ -1,7 +1,52 @@
 """Tests open_transaction_with_retries in isolation -- no real Synapse connection."""
 import pytest
 
-from harness.connector import TransientError, _is_transient, open_transaction_with_retries, redact_secret
+from harness.connector import (
+    MAX_QUERY_ROWS,
+    QueryTooLarge,
+    TransientError,
+    _fetch_capped,
+    _is_transient,
+    open_transaction_with_retries,
+    redact_secret,
+)
+
+
+class _FakeCursor:
+    """Enough of a DB-API cursor for _fetch_capped: description + fetchmany + fetchone."""
+
+    def __init__(self, columns, rows):
+        self.description = [(c,) for c in columns] if columns else None
+        self._rows = list(rows)
+
+    def fetchmany(self, n):
+        batch, self._rows = self._rows[:n], self._rows[n:]
+        return batch
+
+    def fetchone(self):
+        return self._rows[0] if self._rows else None
+
+
+def test_fetch_capped_returns_rows_as_dicts_under_the_cap():
+    cursor = _FakeCursor(["a", "b"], [(1, 2), (3, 4)])
+    assert _fetch_capped(cursor) == [{"a": 1, "b": 2}, {"a": 3, "b": 4}]
+
+
+def test_fetch_capped_returns_empty_list_for_a_non_query_statement():
+    cursor = _FakeCursor(None, [])
+    assert _fetch_capped(cursor) == []
+
+
+def test_fetch_capped_raises_when_more_rows_remain_past_the_cap():
+    cursor = _FakeCursor(["a"], [(i,) for i in range(MAX_QUERY_ROWS + 1)])
+    with pytest.raises(QueryTooLarge, match=str(MAX_QUERY_ROWS)):
+        _fetch_capped(cursor)
+
+
+def test_fetch_capped_does_not_raise_exactly_at_the_cap():
+    cursor = _FakeCursor(["a"], [(i,) for i in range(MAX_QUERY_ROWS)])
+    rows = _fetch_capped(cursor)
+    assert len(rows) == MAX_QUERY_ROWS
 
 
 def test_redact_secret_strips_the_whole_connection_string():

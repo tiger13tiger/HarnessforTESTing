@@ -56,6 +56,12 @@ never a PR from `dev` or any other branch.
 - `python -m harness.metrics_cli` shows a success rate that isn't quietly
   degrading, and a cost that isn't quietly climbing — worth a glance
   periodically, not just when something's already visibly broken.
+- `reports/lessons/<proc-stem>.jsonl` worth a periodic read, same reason —
+  a procedure that keeps generating new distinct failure patterns (not
+  just repeating the same one, which dedup already collapses to one
+  entry) is a candidate for a human-reviewed addition to
+  `harness/llm_client.py`'s `STAGE_GUIDANCE` — see README.md's "Lessons
+  log" section for why that promotion step stays manual.
 - `tests.yml` is passing on `dev`/`uat`/`main` — it runs the full unit
   suite on every push with no path filter. `promote-dev-to-uat.yml`'s own
   pytest step still only fires alongside a `procs/**.sql`/`tests/**.yaml`
@@ -104,6 +110,11 @@ never a PR from `dev` or any other branch.
   should only ever happen as its own reviewed change, with
   `approved_by`/`approved_at` actually filled in, not bundled quietly
   into an unrelated commit.
+- A table *removed* from `infra/blocked_tables.yaml` — unlike the
+  governance file, adding an entry here is always safe (more restrictive);
+  removing one is the sensitive direction, and should be its own reviewed
+  change with a stated reason, not a line that quietly disappeared inside
+  an unrelated diff.
 - `validate-after-merge` failing on a run where `promote` passed — the
   candidate alone was fine, but something about the merge or the UAT
   database's state right after wasn't. Worth a closer look even once the
