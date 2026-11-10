@@ -1,0 +1,398 @@
+<title>HarnessforTESTing Live Status</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<style>
+/* same dark-first console palette as architecture.html, for visual continuity */
+:root {
+  --bg: #0f1419;
+  --surface: #161c24;
+  --surface-2: #1d2530;
+  --fg: #e6eaef;
+  --fg-muted: #8a95a3;
+  --fg-faint: #5a6572;
+  --border: #2b3540;
+  --accent: #5b9bc4;
+  --highlight: #d9a441;
+  --good: #5fae6f;
+  --good-bg: #16261b;
+  --bad: #c96a5e;
+  --bad-bg: #2a1a17;
+  --warn: #d9a441;
+  --warn-bg: #2a2114;
+  --font-display: 'IBM Plex Sans', system-ui, sans-serif;
+  --font-mono: 'IBM Plex Mono', ui-monospace, 'SF Mono', monospace;
+  color-scheme: dark;
+}
+@media (prefers-color-scheme: light) {
+  :root:not([data-theme="dark"]) {
+    --bg: #f3f4f6; --surface: #ffffff; --surface-2: #e9ebef;
+    --fg: #171b20; --fg-muted: #5b6672; --fg-faint: #828e99; --border: #d7dbe0;
+    --accent: #2f6690; --highlight: #a8671f;
+    --good: #2f7a42; --good-bg: #e7f3ea;
+    --bad: #a8392d; --bad-bg: #f8e9e6;
+    --warn: #a8671f; --warn-bg: #f7eed9;
+    color-scheme: light;
+  }
+}
+:root[data-theme="light"] {
+  --bg: #f3f4f6; --surface: #ffffff; --surface-2: #e9ebef;
+  --fg: #171b20; --fg-muted: #5b6672; --fg-faint: #828e99; --border: #d7dbe0;
+  --accent: #2f6690; --highlight: #a8671f;
+  --good: #2f7a42; --good-bg: #e7f3ea;
+  --bad: #a8392d; --bad-bg: #f8e9e6;
+  --warn: #a8671f; --warn-bg: #f7eed9;
+}
+:root[data-theme="dark"] {
+  --bg: #0f1419; --surface: #161c24; --surface-2: #1d2530;
+  --fg: #e6eaef; --fg-muted: #8a95a3; --fg-faint: #5a6572; --border: #2b3540;
+  --accent: #5b9bc4; --highlight: #d9a441;
+  --good: #5fae6f; --good-bg: #16261b;
+  --bad: #c96a5e; --bad-bg: #2a1a17;
+  --warn: #d9a441; --warn-bg: #2a2114;
+}
+*{box-sizing:border-box}
+body{
+  background:var(--bg); color:var(--fg); font-family:var(--font-display);
+  font-size:15px; line-height:1.55; margin:0;
+  padding-left:max(16px, env(safe-area-inset-left,0px));
+  padding-right:max(16px, env(safe-area-inset-right,0px));
+}
+.wrap{max-width:1040px; margin:0 auto; padding-block:36px 64px}
+.nav{display:flex; justify-content:space-between; gap:10px; margin-bottom:22px; font-size:13px}
+.nav a{color:var(--accent); text-decoration:none}
+.nav a:hover{text-decoration:underline}
+.kicker{font-family:var(--font-mono); font-size:11px; letter-spacing:.1em; text-transform:uppercase; color:var(--fg-faint); margin:0 0 10px}
+h1{font-family:var(--font-display); font-size:clamp(24px,4vw,32px); font-weight:700; margin:0 0 8px; letter-spacing:-.01em}
+.sub{color:var(--fg-muted); max-width:640px; margin-bottom:10px}
+code{font-family:var(--font-mono); font-size:0.92em}
+
+.refresh-row{display:flex; align-items:center; gap:12px; flex-wrap:wrap; margin-bottom:28px}
+button{
+  font-family:var(--font-mono); font-size:12.5px; background:var(--surface-2); color:var(--fg);
+  border:1px solid var(--border); border-radius:7px; padding:7px 14px; cursor:pointer;
+}
+button:hover{border-color:var(--accent)}
+button:disabled{opacity:.5; cursor:default}
+#lastRefreshed{font-family:var(--font-mono); font-size:12px; color:var(--fg-faint)}
+
+section{margin-bottom:28px}
+.card{background:var(--surface); border:1px solid var(--border); border-radius:12px; overflow:hidden}
+.card-head{padding:16px 20px; border-bottom:1px solid var(--border); display:flex; align-items:baseline; justify-content:space-between; gap:12px; flex-wrap:wrap}
+.card-head h2{font-size:17px; margin:0}
+.card-body{padding:20px}
+.card-body > p.hint{color:var(--fg-muted); font-size:13.5px; margin:0 0 16px; max-width:680px}
+
+.pill{font-family:var(--font-mono); font-size:11px; letter-spacing:.03em; padding:4px 10px; border-radius:999px; white-space:nowrap}
+.pill.good{color:var(--good); background:var(--good-bg); border:1px solid color-mix(in srgb, var(--good) 40%, transparent)}
+.pill.bad{color:var(--bad); background:var(--bad-bg); border:1px solid color-mix(in srgb, var(--bad) 40%, transparent)}
+.pill.warn{color:var(--warn); background:var(--warn-bg); border:1px solid color-mix(in srgb, var(--warn) 40%, transparent)}
+.pill.muted{color:var(--fg-muted); background:var(--surface-2); border:1px solid var(--border)}
+
+.branch-row{display:grid; grid-template-columns:90px 1fr auto; gap:12px; align-items:center; padding:9px 0; border-top:1px solid var(--border)}
+.branch-row:first-child{border-top:none}
+.branch-row .branch{font-family:var(--font-mono); font-size:13px; color:var(--fg-muted)}
+.branch-row .detail{font-size:13px; color:var(--fg-muted); min-width:0}
+
+.stat-grid{display:grid; grid-template-columns:repeat(4,1fr); gap:10px; margin-bottom:18px}
+@media (max-width:700px){.stat-grid{grid-template-columns:repeat(2,1fr)}}
+.stat{background:var(--surface-2); border:1px solid var(--border); border-radius:9px; padding:12px 14px}
+.stat .label{font-size:10.5px; letter-spacing:.07em; text-transform:uppercase; color:var(--fg-faint); margin-bottom:5px}
+.stat .value{font-family:var(--font-mono); font-size:18px; font-weight:600}
+
+table{width:100%; border-collapse:collapse; font-size:13px}
+th,td{text-align:left; padding:7px 10px; border-bottom:1px solid var(--border)}
+th{color:var(--fg-faint); font-size:11px; letter-spacing:.05em; text-transform:uppercase; font-weight:600}
+td.mono,th.mono{font-family:var(--font-mono)}
+.table-wrap{overflow-x:auto}
+
+.pulse-row{display:grid; grid-template-columns:1fr auto auto; gap:12px; align-items:center; padding:10px 0; border-top:1px solid var(--border)}
+.pulse-row:first-child{border-top:none}
+.pulse-row .name{font-family:var(--font-mono); font-size:13px}
+.pulse-row .when{font-size:12px; color:var(--fg-faint); white-space:nowrap}
+.pulse-row a{color:var(--accent); text-decoration:none; font-size:12px}
+.pulse-row a:hover{text-decoration:underline}
+
+.skeleton{color:var(--fg-faint); font-family:var(--font-mono); font-size:13px}
+.err-box{color:var(--bad); font-family:var(--font-mono); font-size:12.5px; background:var(--bad-bg); border:1px solid color-mix(in srgb, var(--bad) 40%, transparent); border-radius:8px; padding:10px 14px}
+
+footer{margin-top:36px; padding-top:18px; border-top:1px solid var(--border); font-size:12px; color:var(--fg-faint)}
+footer a{color:var(--accent)}
+</style>
+
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500;600&display=swap">
+
+<div class="wrap">
+  <div class="nav">
+    <a href="architecture.html">&larr; architecture diagram</a>
+    <span id="rateNote" style="color:var(--fg-faint)"></span>
+  </div>
+  <p class="kicker">HarnessforTESTing &middot; live, fetched client-side from GitHub on every page load</p>
+  <h1>Live status</h1>
+  <p class="sub">Not a snapshot &mdash; this page fetches <code>infra/deepseek_governance_approval.yaml</code>, <code>reports/metrics_log.jsonl</code>, and the latest Actions runs straight from GitHub each time it loads. Whatever it shows is the real current state of the repo, right now.</p>
+  <div class="refresh-row">
+    <button id="refreshBtn" onclick="refreshAll()">Refresh now</button>
+    <span id="lastRefreshed">not yet loaded</span>
+  </div>
+
+  <section id="sec-governance">
+    <div class="card">
+      <div class="card-head">
+        <h2>DeepSeek governance gate</h2>
+        <span class="pill muted">per branch</span>
+      </div>
+      <div class="card-body">
+        <p class="hint">Enforced by <code>harness/governance_check.py</code>, called from <code>auto-fix-dev.yml</code> before any DeepSeek call. The value that actually blocks the next auto-fix run is <strong>dev</strong>'s copy of the file.</p>
+        <div id="governance-content" class="skeleton">loading infra/deepseek_governance_approval.yaml from dev, uat, main&hellip;</div>
+      </div>
+    </div>
+  </section>
+
+  <section id="sec-metrics">
+    <div class="card">
+      <div class="card-head">
+        <h2>Model-drift &amp; cost log</h2>
+        <span class="pill muted">reports/metrics_log.jsonl &middot; dev</span>
+      </div>
+      <div class="card-body">
+        <p class="hint">One line per auto-fix attempt (converged or not): model id, token usage, estimated cost. A before/after split in success rate for one model id, over time, is what a silent provider-side model swap would look like here.</p>
+        <div id="metrics-content" class="skeleton">loading reports/metrics_log.jsonl from dev&hellip;</div>
+      </div>
+    </div>
+  </section>
+
+  <section id="sec-pipeline">
+    <div class="card">
+      <div class="card-head">
+        <h2>Pipeline pulse</h2>
+        <span class="pill muted">latest run per workflow</span>
+      </div>
+      <div class="card-body">
+        <p class="hint">Most recent run of each workflow, fetched from the Actions API.</p>
+        <div id="pipeline-content" class="skeleton">loading latest workflow runs&hellip;</div>
+      </div>
+    </div>
+  </section>
+
+  <footer>
+    Source for this page: <a href="https://github.com/tiger13tiger/HarnessforTESTing/blob/main/docs/status.html">docs/status.html</a>.
+    No build step, no server &mdash; plain fetch() calls to <code>raw.githubusercontent.com</code> and <code>api.github.com</code> on a public repo.
+    Unauthenticated GitHub API calls are rate-limited to 60/hour per visitor's IP; if a section shows a rate-limit error, wait a bit and hit Refresh.
+  </footer>
+</div>
+
+<script>
+const OWNER = 'tiger13tiger';
+const REPO = 'HarnessforTESTing';
+
+async function fetchRaw(branch, path) {
+  const res = await fetch(`https://raw.githubusercontent.com/${OWNER}/${REPO}/${branch}/${path}`, { cache: 'no-store' });
+  if (res.status === 404) return { notFound: true };
+  if (!res.ok) throw new Error(`raw ${branch}/${path}: HTTP ${res.status}`);
+  return { text: await res.text() };
+}
+
+async function fetchApi(path) {
+  const res = await fetch(`https://api.github.com/repos/${OWNER}/${REPO}${path}`, {
+    headers: { Accept: 'application/vnd.github+json' },
+    cache: 'no-store',
+  });
+  const remaining = res.headers.get('x-ratelimit-remaining');
+  if (remaining !== null) updateRateNote(remaining);
+  if (res.status === 403 || res.status === 429) throw new Error('rate-limited');
+  if (!res.ok) throw new Error(`api ${path}: HTTP ${res.status}`);
+  return res.json();
+}
+
+function updateRateNote(remaining) {
+  const el = document.getElementById('rateNote');
+  const n = Number(remaining);
+  if (!Number.isNaN(n) && n <= 10) {
+    el.textContent = `GitHub API: ${n} requests left this hour`;
+  }
+}
+
+// Flat key: value YAML only -- exactly what infra/deepseek_governance_approval.yaml is.
+function parseFlatYaml(text) {
+  const out = {};
+  for (const rawLine of text.split('\n')) {
+    const line = rawLine.trim();
+    if (!line || line.startsWith('#')) continue;
+    const idx = line.indexOf(':');
+    if (idx === -1) continue;
+    const key = line.slice(0, idx).trim();
+    let value = line.slice(idx + 1).trim();
+    value = value.replace(/\s+#.*$/, '').trim();
+    if ((value.startsWith('"') && value.endsWith('"')) || (value.startsWith("'") && value.endsWith("'"))) {
+      value = value.slice(1, -1);
+    }
+    if (value === 'true') value = true;
+    else if (value === 'false') value = false;
+    out[key] = value;
+  }
+  return out;
+}
+
+function parseJsonl(text) {
+  const entries = [];
+  for (const line of text.split('\n')) {
+    const trimmed = line.trim();
+    if (!trimmed) continue;
+    try { entries.push(JSON.parse(trimmed)); } catch (e) { /* skip a malformed line rather than failing the page */ }
+  }
+  return entries;
+}
+
+function escapeHtml(s) {
+  return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+
+function relativeTime(iso) {
+  const diffMs = Date.now() - new Date(iso).getTime();
+  const mins = Math.round(diffMs / 60000);
+  if (mins < 1) return 'just now';
+  if (mins < 60) return `${mins}m ago`;
+  const hrs = Math.round(mins / 60);
+  if (hrs < 48) return `${hrs}h ago`;
+  return `${Math.round(hrs / 24)}d ago`;
+}
+
+async function loadGovernance() {
+  const el = document.getElementById('governance-content');
+  el.className = 'skeleton';
+  el.textContent = 'loading infra/deepseek_governance_approval.yaml from dev, uat, main…';
+  try {
+    const branches = ['dev', 'uat', 'main'];
+    const results = await Promise.all(branches.map(b => fetchRaw(b, 'infra/deepseek_governance_approval.yaml')));
+    let html = '';
+    results.forEach((r, i) => {
+      const branch = branches[i];
+      if (r.notFound) {
+        html += `<div class="branch-row"><span class="branch">${branch}</span><span class="detail">file not found</span><span class="pill bad">BLOCKED</span></div>`;
+        return;
+      }
+      const data = parseFlatYaml(r.text);
+      if (data.approved === true && data.approved_by && data.approved_at) {
+        html += `<div class="branch-row"><span class="branch">${branch}</span><span class="detail">approved by ${escapeHtml(data.approved_by)} on ${escapeHtml(data.approved_at)}</span><span class="pill good">APPROVED</span></div>`;
+      } else if (data.approved === true) {
+        html += `<div class="branch-row"><span class="branch">${branch}</span><span class="detail">approved: true but approved_by/approved_at missing</span><span class="pill warn">INVALID</span></div>`;
+      } else {
+        html += `<div class="branch-row"><span class="branch">${branch}</span><span class="detail">approved: false</span><span class="pill bad">BLOCKED</span></div>`;
+      }
+    });
+    el.className = '';
+    el.innerHTML = html;
+  } catch (e) {
+    el.className = 'err-box';
+    el.textContent = `Could not load governance state: ${e.message}`;
+  }
+}
+
+async function loadMetrics() {
+  const el = document.getElementById('metrics-content');
+  el.className = 'skeleton';
+  el.textContent = 'loading reports/metrics_log.jsonl from dev…';
+  try {
+    const r = await fetchRaw('dev', 'reports/metrics_log.jsonl');
+    const entries = r.notFound ? [] : parseJsonl(r.text);
+    if (entries.length === 0) {
+      el.className = '';
+      el.innerHTML = `<p style="color:var(--fg-muted); margin:0">No entries yet. The mechanism is wired (every auto-fix round appends one line here, converged or not) but no round has reached this step without being stopped first &mdash; e.g. by the governance gate above.</p>`;
+      return;
+    }
+    const total = entries.length;
+    const successes = entries.filter(e => e.success).length;
+    const totalTokens = entries.reduce((s, e) => s + (e.total_tokens || 0), 0);
+    const totalCost = entries.reduce((s, e) => s + (e.estimated_cost_usd || 0), 0);
+    const byModel = {};
+    for (const e of entries) {
+      const m = e.model || '(unknown)';
+      byModel[m] = byModel[m] || { attempts: 0, successes: 0 };
+      byModel[m].attempts++;
+      if (e.success) byModel[m].successes++;
+    }
+    let rows = '';
+    for (const [model, s] of Object.entries(byModel)) {
+      const rate = s.attempts ? Math.round((s.successes / s.attempts) * 100) : 0;
+      rows += `<tr><td class="mono">${escapeHtml(model)}</td><td class="mono">${s.successes}/${s.attempts}</td><td class="mono">${rate}%</td></tr>`;
+    }
+    el.className = '';
+    el.innerHTML = `
+      <div class="stat-grid">
+        <div class="stat"><div class="label">Attempts</div><div class="value">${total}</div></div>
+        <div class="stat"><div class="label">Success rate</div><div class="value">${Math.round((successes / total) * 100)}%</div></div>
+        <div class="stat"><div class="label">Total tokens</div><div class="value">${totalTokens.toLocaleString()}</div></div>
+        <div class="stat"><div class="label">Est. cost</div><div class="value">$${totalCost.toFixed(4)}</div></div>
+      </div>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Model</th><th>Success</th><th>Rate</th></tr></thead>
+          <tbody>${rows}</tbody>
+        </table>
+      </div>`;
+  } catch (e) {
+    el.className = 'err-box';
+    el.textContent = `Could not load metrics log: ${e.message}`;
+  }
+}
+
+const WORKFLOWS = [
+  { file: 'promote-dev-to-uat.yml', label: 'promote-dev-to-uat (Gate 1)' },
+  { file: 'uat-to-prd-gate.yml', label: 'uat-to-prd-gate (Gate 2, human review)' },
+  { file: 'secrets-smoke-test.yml', label: 'secrets-smoke-test (daily)' },
+];
+
+async function loadPipeline() {
+  const el = document.getElementById('pipeline-content');
+  el.className = 'skeleton';
+  el.textContent = 'loading latest workflow runs…';
+  try {
+    const results = await Promise.all(WORKFLOWS.map(async w => {
+      try {
+        const data = await fetchApi(`/actions/workflows/${w.file}/runs?per_page=1`);
+        return { ...w, run: (data.workflow_runs || [])[0] || null, error: null };
+      } catch (e) {
+        return { ...w, run: null, error: e.message };
+      }
+    }));
+    let html = '';
+    for (const r of results) {
+      if (r.error) {
+        html += `<div class="pulse-row"><span class="name">${escapeHtml(r.label)}</span><span class="pill warn">unavailable</span><span></span></div>`;
+        continue;
+      }
+      if (!r.run) {
+        html += `<div class="pulse-row"><span class="name">${escapeHtml(r.label)}</span><span class="pill muted">no runs yet</span><span></span></div>`;
+        continue;
+      }
+      const run = r.run;
+      let pillClass = 'muted', pillText = run.status;
+      if (run.status === 'completed') {
+        pillClass = run.conclusion === 'success' ? 'good' : (run.conclusion === 'failure' ? 'bad' : 'warn');
+        pillText = run.conclusion;
+      } else if (run.status === 'in_progress' || run.status === 'queued') {
+        pillClass = 'warn';
+      }
+      html += `<div class="pulse-row">
+        <span class="name">${escapeHtml(r.label)}</span>
+        <span class="pill ${pillClass}">${escapeHtml(pillText)}</span>
+        <span class="when"><a href="${run.html_url}" target="_blank" rel="noopener">${relativeTime(run.created_at)}</a></span>
+      </div>`;
+    }
+    el.className = '';
+    el.innerHTML = html;
+  } catch (e) {
+    el.className = 'err-box';
+    el.textContent = `Could not load pipeline runs: ${e.message}`;
+  }
+}
+
+async function refreshAll() {
+  const btn = document.getElementById('refreshBtn');
+  btn.disabled = true;
+  document.getElementById('lastRefreshed').textContent = 'refreshing…';
+  await Promise.all([loadGovernance(), loadMetrics(), loadPipeline()]);
+  document.getElementById('lastRefreshed').textContent = `last refreshed ${new Date().toLocaleTimeString()}`;
+  btn.disabled = false;
+}
+
+refreshAll();
+</script>
