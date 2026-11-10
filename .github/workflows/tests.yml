@@ -1,0 +1,39 @@
+name: Unit tests
+
+# Runs the fast, no-database unit test suite on every push to dev/uat/main and
+# every PR into main -- deliberately with NO path filter, unlike
+# promote-dev-to-uat.yml and uat-to-prd-gate.yml (gated to procs/**.sql and
+# tests/**.yaml because those jobs need a live Azure SQL connection and
+# shouldn't fire for every unrelated change). Those two already run pytest
+# too, but only when a proc/test file happens to change in the same push --
+# a harness/**.py-only change (exactly what this session's manifest/metrics/
+# governance work was: a 900-line, 22-file commit that touched zero files
+# matching either filter) landed on main with no automated test coverage at
+# all, caught only by remembering to run pytest locally first.
+#
+# This is cheap to run unconditionally: pyodbc is imported lazily, only
+# inside the specific connector.py methods that make a real DB call, so the
+# unit suite needs no ODBC driver installed at all -- just the Python
+# dependencies.
+
+on:
+  push:
+    branches: [dev, uat, main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run unit tests
+        run: python -m pytest -q

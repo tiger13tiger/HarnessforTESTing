@@ -55,6 +55,12 @@ never a PR from `dev` or any other branch.
 - `python -m harness.metrics_cli` shows a success rate that isn't quietly
   degrading, and a cost that isn't quietly climbing — worth a glance
   periodically, not just when something's already visibly broken.
+- `tests.yml` is passing on `dev`/`uat`/`main` — it runs the full unit
+  suite on every push with no path filter, unlike `promote-dev-to-uat.yml`
+  and `uat-to-prd-gate.yml`'s own pytest steps, which only fire alongside a
+  `procs/**.sql`/`tests/**.yaml` change. A `harness/**.py`-only change
+  still won't trigger live UAT validation (correct — it doesn't need a
+  database round-trip), but it should still show a green `tests.yml` run.
 
 ## Red flags — stop and look
 

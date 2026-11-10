@@ -2,8 +2,17 @@
 suggest_fix() for AnthropicLLMClient/DeepSeekLLMClient is exercised for real
 by running harness/evolve_cli.py by hand, not by the automated suite."""
 import pytest
+import yaml
 
 from harness.llm_client import AnthropicLLMClient, DeepSeekLLMClient, _build_prompt
+
+
+def _approved_governance_file(tmp_path):
+    path = tmp_path / "governance.yaml"
+    path.write_text(yaml.safe_dump({
+        "approved": True, "approved_by": "test", "approved_at": "2026-01-01",
+    }), encoding="utf-8")
+    return str(path)
 
 
 def test_anthropic_client_requires_an_api_key(monkeypatch):
@@ -12,17 +21,36 @@ def test_anthropic_client_requires_an_api_key(monkeypatch):
         AnthropicLLMClient()
 
 
-def test_deepseek_client_requires_an_api_key(monkeypatch):
+def test_deepseek_client_requires_an_api_key(monkeypatch, tmp_path):
     monkeypatch.delenv("DEEPSEEK_API_KEY", raising=False)
     with pytest.raises(RuntimeError):
-        DeepSeekLLMClient()
+        DeepSeekLLMClient(governance_path=_approved_governance_file(tmp_path))
 
 
-def test_deepseek_client_picks_up_the_key_from_the_environment(monkeypatch):
+def test_deepseek_client_picks_up_the_key_from_the_environment(monkeypatch, tmp_path):
     monkeypatch.setenv("DEEPSEEK_API_KEY", "sk-test")
-    client = DeepSeekLLMClient()
+    client = DeepSeekLLMClient(governance_path=_approved_governance_file(tmp_path))
     assert client.api_key == "sk-test"
     assert client.model == "deepseek-chat"
+
+
+def test_deepseek_client_refuses_to_construct_without_governance_approval(monkeypatch, tmp_path):
+    # This is the actual enforcement point: auto-fix-dev.yml's separate
+    # governance_check.py CI step is just one caller of this same code path.
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "sk-test")
+    missing_path = str(tmp_path / "does_not_exist.yaml")
+    with pytest.raises(RuntimeError, match="governance check failed"):
+        DeepSeekLLMClient(governance_path=missing_path)
+
+
+def test_deepseek_client_governance_check_runs_before_the_api_key_check(monkeypatch, tmp_path):
+    # Governance is unapproved AND the key is missing -- governance should be
+    # what's reported, since "not allowed to use this provider at all" is the
+    # more fundamental block.
+    monkeypatch.delenv("DEEPSEEK_API_KEY", raising=False)
+    missing_path = str(tmp_path / "does_not_exist.yaml")
+    with pytest.raises(RuntimeError, match="governance check failed"):
+        DeepSeekLLMClient(governance_path=missing_path)
 
 
 @pytest.mark.parametrize("stage,expected_phrase", [
@@ -51,7 +79,7 @@ class _FakeResponse:
         return self._payload
 
 
-def test_deepseek_client_captures_token_usage(monkeypatch):
+def test_deepseek_client_captures_token_usage(monkeypatch, tmp_path):
     monkeypatch.setenv("DEEPSEEK_API_KEY", "sk-test")
     payload = {
         "choices": [{"message": {"content": "```sql\nSELECT 1\n```"}}],
@@ -61,19 +89,19 @@ def test_deepseek_client_captures_token_usage(monkeypatch):
     import requests
     monkeypatch.setattr(requests, "post", lambda *a, **k: _FakeResponse(payload))
 
-    client = DeepSeekLLMClient()
+    client = DeepSeekLLMClient(governance_path=_approved_governance_file(tmp_path))
     suggestion = client.suggest_fix("CREATE OR ALTER PROCEDURE dbo.sp_x\nAS\nBEGIN\n  SELECT 1;\nEND", [], "ctx")
 
     assert suggestion.usage == {"input_tokens": 123, "output_tokens": 45}
 
 
-def test_deepseek_client_defaults_usage_to_zero_when_missing(monkeypatch):
+def test_deepseek_client_defaults_usage_to_zero_when_missing(monkeypatch, tmp_path):
     monkeypatch.setenv("DEEPSEEK_API_KEY", "sk-test")
     payload = {"choices": [{"message": {"content": "SELECT 1"}}]}  # no "usage" key at all
     import requests
     monkeypatch.setattr(requests, "post", lambda *a, **k: _FakeResponse(payload))
 
-    client = DeepSeekLLMClient()
+    client = DeepSeekLLMClient(governance_path=_approved_governance_file(tmp_path))
     suggestion = client.suggest_fix("...", [], "ctx")
 
     assert suggestion.usage == {"input_tokens": 0, "output_tokens": 0}
