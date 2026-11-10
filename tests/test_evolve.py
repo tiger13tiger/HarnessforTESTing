@@ -180,3 +180,29 @@ def test_evolve_fails_cleanly_instead_of_crashing_when_the_llm_keeps_erroring(mo
     assert "simulated API outage" in history[-1].error
     # stopped after the first validate attempt + the exhausted LLM retry, not all 5 iterations
     assert len(history) == 2
+
+
+def test_evolve_withholds_a_rationale_that_looks_like_it_leaked_pii():
+    # The rationale is what gets written verbatim into a public git commit
+    # message and PR comment -- this must never happen, and the loop must
+    # stop rather than try the suggested fix with a tainted history entry.
+    connector = MockConnector({CHECK_SQL: [{"revenue": 2000.0}]})  # always wrong, so a fix is always requested
+    llm = MockLLMClient([FixSuggestion(
+        sql=FIXED_SQL,
+        rationale="Looks like this is for customer jane.doe@example.com -- removed the fan-out join",
+    )])
+
+    success, history = evolve(
+        initial_sql=BUGGY_SQL,
+        exec_statement="EXEC sandbox.sp_refresh",
+        validation_suite=SUITE,
+        connector=connector,
+        llm_client=llm,
+        allowed_schema="sandbox",
+        max_iterations=5,
+    )
+
+    assert success is False
+    assert "withheld" in history[-1].error
+    assert "jane.doe@example.com" not in history[-1].rationale
+    assert history[-1].rationale == "(withheld: looked like it contained PII)"

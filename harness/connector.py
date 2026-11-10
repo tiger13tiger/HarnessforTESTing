@@ -4,6 +4,14 @@ import os
 import re
 import time
 
+# Resource-exhaustion guard: a validation query is checking an aggregated
+# business figure, never pulling a whole fact table into memory -- one that
+# returns more than this many rows is almost certainly a bad check.sql
+# (missing a GROUP BY) rather than a real need for more rows, so this fails
+# loud instead of silently truncating a result set a check then compares
+# against gold values as if it were complete.
+MAX_QUERY_ROWS = 10_000
+
 # ODBC-level SQLSTATEs worth retrying (deadlock, login timeout, network blip).
 # pyodbc.Error's first arg is this generic ODBC state, e.g. '08S01' -- it is
 # NOT where Azure SQL's own error numbers show up (see below).
@@ -43,6 +51,24 @@ def redact_secret(text: str, conn_str: str | None) -> str:
 class TransientError(Exception):
     """A connection/query error worth retrying (deadlock, timeout, throttling,
     a serverless database resuming from auto-pause)."""
+
+
+class QueryTooLarge(Exception):
+    """A query returned more than MAX_QUERY_ROWS rows."""
+
+
+def _fetch_capped(cursor) -> list[dict]:
+    if cursor.description is None:
+        return []
+    columns = [c[0] for c in cursor.description]
+    rows = cursor.fetchmany(MAX_QUERY_ROWS)
+    if cursor.fetchone() is not None:
+        raise QueryTooLarge(
+            f"query returned more than {MAX_QUERY_ROWS} rows -- aggregate in SQL "
+            "(a GROUP BY, a SUM/COUNT) instead of comparing raw rows, or reconsider "
+            "MAX_QUERY_ROWS in harness/connector.py if this check genuinely needs more"
+        )
+    return [dict(zip(columns, row)) for row in rows]
 
 
 def _is_transient(exc: Exception) -> bool:
@@ -99,10 +125,7 @@ class SynapseConnector:
                 conn.timeout = self.query_timeout
                 cursor = conn.cursor()
                 cursor.execute(sql, params or [])
-                if cursor.description is None:
-                    return []
-                columns = [c[0] for c in cursor.description]
-                return [dict(zip(columns, row)) for row in cursor.fetchall()]
+                return _fetch_capped(cursor)
         except pyodbc.Error as exc:
             if _is_transient(exc):
                 raise TransientError(str(exc)) from exc
@@ -169,10 +192,7 @@ class SynapseTransaction:
         try:
             cursor = self._conn.cursor()
             cursor.execute(sql, params or [])
-            if cursor.description is None:
-                return []
-            columns = [c[0] for c in cursor.description]
-            return [dict(zip(columns, row)) for row in cursor.fetchall()]
+            return _fetch_capped(cursor)
         except pyodbc.Error as exc:
             if _is_transient(exc):
                 raise TransientError(str(exc)) from exc

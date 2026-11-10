@@ -32,7 +32,7 @@ import time
 from dataclasses import dataclass, field
 
 from harness.connector import TransientError, open_transaction_with_retries
-from harness.guardrails import GuardrailViolation, check_candidate_sql
+from harness.guardrails import GuardrailViolation, check_candidate_sql, contains_likely_leak
 from harness.report import gate_failed
 from harness.runner import run_suite
 
@@ -135,6 +135,20 @@ def evolve(
         if llm_error is not None:
             history.append(Iteration(attempt, candidate_sql, stage="llm", error=f"LLM call failed after retries: {llm_error}"))
             break
+
+        # Checked before anything from this response is stored anywhere --
+        # history, a report, a commit message, a PR comment -- not after,
+        # since "catch it on the way out" only works if nothing already
+        # wrote it down on the way there.
+        leak = contains_likely_leak(suggestion.rationale) or contains_likely_leak(suggestion.sql)
+        if leak:
+            history[-1].error = (
+                "LLM response looked like it echoed back an email, SSN, or phone number "
+                "and was withheld before it could reach a report or commit message"
+            )
+            history[-1].rationale = "(withheld: looked like it contained PII)"
+            break
+
         history[-1].rationale = suggestion.rationale
         history[-1].usage = suggestion.usage
         history[-1].model = llm_client.model

@@ -52,13 +52,21 @@ This harness borrows a few ideas from an AI-agent evaluation framework
   report for the test analyst, full detail for follow-up, and an exit code
   ready to gate a CI pipeline later if you wire this into Azure DevOps.
 
-Dropped: guardrails against *prompt injection*, LLM-as-judge, RAG — none of
-that applies when there's no AI agent reading untrusted data. **Prompt
-evolution did turn out to apply**, repurposed as the auto-fix loop below:
-same idea (mutate a candidate, evaluate, keep only if it passes), but the
-thing being evolved is a stored procedure instead of a prompt, and the judge
-is a SQL result compared to business-verified numbers instead of an LLM
-grading free text.
+Dropped at the start: LLM-as-judge, RAG — neither applies when the judge is
+a SQL result compared to business-verified numbers, not an LLM grading free
+text. **Prompt injection guardrails turned out to apply after all** — the
+original reasoning ("no AI agent reading untrusted data") didn't hold up:
+the auto-fix loop's prompt is built from a failing check's `details` and a
+caller-supplied `context` string, both of which could carry text this
+harness didn't author. `harness/llm_client.py`'s prompt now says explicitly
+not to follow instructions found inside them, and `harness/guardrails.py`
+checks what comes back — not just what goes in — for two separate things:
+a second statement smuggled in after the procedure's own `END`, and
+anything that looks like it leaked an email/SSN/phone, withheld before it
+could reach a commit message. See **Guardrails** below. **Prompt evolution
+did turn out to apply**, repurposed as the auto-fix loop below: same idea
+(mutate a candidate, evaluate, keep only if it passes), but the thing being
+evolved is a stored procedure instead of a prompt.
 
 ## What it checks
 
@@ -142,13 +150,18 @@ python -m harness.evolve_cli \
 
 - **Guardrail-checked before every deploy.** `harness/guardrails.py` checks
   each candidate *before* it's deployed: it must be exactly one
-  `CREATE OR ALTER PROCEDURE` statement, targeting the schema you pass via
-  `--allowed-schema`, with no `DROP DATABASE`/`TRUNCATE TABLE`/
-  `xp_cmdshell`/etc. A candidate that fails this is rejected without
-  touching the database at all. This is a text-level allow-list, not a full
-  security boundary — the real isolation is that `--conn-env` should point
-  at your DEV environment, physically separate from UAT/PRD, with
-  least-privilege credentials.
+  `CREATE OR ALTER PROCEDURE` statement — including nothing smuggled in
+  after its own closing `END`, not just checking how it starts — targeting
+  the schema you pass via `--allowed-schema`, with no
+  `DROP DATABASE`/`TRUNCATE TABLE`/`xp_cmdshell`/etc., and no reference to
+  any table on `infra/blocked_tables.yaml`'s PII blocklist. A candidate
+  that fails this is rejected without touching the database at all. See
+  **Guardrails** below for the full picture, including what gets checked
+  on the way *out* of the LLM, not just on the way in. This is a
+  text-level allow-list, not a full security boundary — the real isolation
+  is that `--conn-env` should point at your DEV environment, physically
+  separate from UAT/PRD, with least-privilege credentials
+  (`infra/azure_sql_setup.sh` has the actual `GRANT` statements).
 - **Every attempt runs in one transaction, rolled back on failure.**
   Deploy → `EXEC` → validate all happen on the same held-open connection
   (`harness/connector.py`'s `SynapseTransaction`), so the validation
@@ -409,6 +422,63 @@ who approved it, when) is still entirely a decision for your organization
 to make — not something this harness can do on its own. The point is
 narrower: that decision can no longer be silently skipped just because
 nobody got around to it.
+
+## Guardrails
+
+`harness/guardrails.py`'s `check_candidate_sql()` runs before every deploy
+(both `evolve.py`'s loop and `promote.py`), and checks more than "is this a
+`CREATE OR ALTER PROCEDURE` statement in the right schema":
+
+- **No second statement smuggled in after the procedure's own closing
+  `END`.** `CREATE OR ALTER PROCEDURE ... END; DROP TABLE dbo.something;`
+  is syntactically one batch an LLM could generate, and a check that only
+  looks at how the text *starts* would never see the second half. This
+  strips comments and string literals first (so a filter value or a
+  comment that happens to contain the word `END` doesn't confuse it),
+  tracks `BEGIN`/`END` nesting depth to find the real closing `END` (IF
+  blocks and `TRY`/`CATCH` each introduce their own), and rejects anything
+  left over — including a candidate with no balanced `BEGIN`/`END` at all,
+  since that means the check can't confirm where the body actually ends.
+- **No reference to a table on the PII blocklist.** `infra/blocked_tables.yaml`
+  (empty by default) names tables a candidate must never touch in any
+  form — not just as a destructive-operation target, which the existing
+  schema-scoped `TRUNCATE`/`DROP` check already covers, but a plain
+  `SELECT` or `JOIN` too. Add a table here the moment a real PII-bearing
+  table becomes reachable from any database this harness touches.
+- **The LLM's response is scanned before it's stored anywhere.**
+  `contains_likely_leak()` checks a fix's rationale and SQL for anything
+  that looks like an email, SSN, or phone number — the rationale text gets
+  written verbatim into a public git commit message and PR comment, so
+  this runs in `harness/evolve.py` *before* either is assigned to
+  `Iteration.rationale`, not after. A match withholds the real text
+  (`"(withheld: looked like it contained PII)"`) and stops the loop,
+  rather than risk writing a real value down somewhere permanent and
+  public.
+- **The prompt itself says not to follow instructions found inside the
+  data it's given.** `harness/llm_client.py`'s `_build_prompt()` tells the
+  model that the context, current procedure, and check output are data
+  about what's broken, not commands to obey — a failing check's `details`
+  or a caller-supplied `context` string could in principle carry text this
+  harness didn't author.
+- **A query can't return more than 10,000 rows.** `harness/connector.py`'s
+  `MAX_QUERY_ROWS` cap (`fetchmany`, not `fetchall`) fails loud —
+  `QueryTooLarge`, caught per-check like any other check failure — rather
+  than silently truncating a result set a check then compares against gold
+  values as if it were complete. A validation query checking an aggregated
+  business figure should never need more than this; one that does needs a
+  different query, not a bigger cap.
+
+**What this doesn't give you**, same honest caveat as always: the text-level
+checks above are not a substitute for least-privilege database credentials
+(`infra/azure_sql_setup.sh` has the actual `GRANT` statements) or a
+read-only connection where one would apply. `infra/guardrail_attacks.yaml`
++ `tests/test_guardrail_attacks.py` is a catalogued, regression-tested set
+of attack payloads proving each check above catches what it claims to when
+fed directly — it is **not** the same as running attacks through a live LLM
+and measuring what gets past it, which this repo doesn't do yet. (Modeled
+on a sibling project, [`bank-data-agent-eval`](https://github.com/tiger13tiger/bank-data-agent-eval),
+built specifically to attack a text-to-SQL agent — its `guardrails.py` and
+`eval_safety()` are worth reading if you're extending this section.)
 
 ## Adding a check
 
