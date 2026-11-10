@@ -48,6 +48,13 @@ never a PR from `dev` or any other branch.
   secret, or trust its daily schedule) — `SYNAPSE_DEV_CONN_STR`,
   `SYNAPSE_UAT_CONN_STR`, `DEEPSEEK_API_KEY`, and `GH_PAT` all actually
   authenticate, not just exist.
+- Every procedure in `procs/manifest.yaml` is passing `promote` and
+  `validate-after-merge` on the same run — a manifest with more than one
+  procedure means "uat is ready" requires *all* of them clean, not just
+  the one you happen to be watching.
+- `python -m harness.metrics_cli` shows a success rate that isn't quietly
+  degrading, and a cost that isn't quietly climbing — worth a glance
+  periodically, not just when something's already visibly broken.
 
 ## Red flags — stop and look
 
@@ -70,10 +77,16 @@ never a PR from `dev` or any other branch.
   of resolving itself. The cap is shared: it can be reached from either
   `promote` failing or `validate-after-merge` failing, so check which one
   triggered it.
-- A `[auto-fix round N/3]` commit on `dev` whose diff doesn't actually
-  change the procedure file (the job should have made no commit at all in
-  that case) — would indicate the no-op guard in that job's push step
-  isn't doing what it's supposed to.
+- A `[auto-fix round N/3]` commit on `dev` that changes nothing at all —
+  not even `reports/metrics_log.jsonl` — would indicate the no-op guard in
+  that job's push step isn't doing what it's supposed to. (A round where
+  the procedure file itself didn't change but the metrics log did is
+  normal and expected: that's what a non-convergent attempt looks like.)
+- `infra/deepseek_governance_approval.yaml` showing `approved: true` with
+  no real sign-off behind it — that file going from `false` to `true`
+  should only ever happen as its own reviewed change, with
+  `approved_by`/`approved_at` actually filled in, not bundled quietly
+  into an unrelated commit.
 - `validate-after-merge` failing on a run where `promote` passed — the
   candidate alone was fine, but something about the merge or the UAT
   database's state right after wasn't. Worth a closer look even once the

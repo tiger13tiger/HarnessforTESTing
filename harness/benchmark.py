@@ -157,6 +157,7 @@ def _case_llm_flake_then_recovers():
     class _FlakyLLM:
         def __init__(self):
             self.calls = 0
+            self.model = "flaky-mock"
 
         def suggest_fix(self, original_sql, failing_checks, context, stage="validate"):
             self.calls += 1
