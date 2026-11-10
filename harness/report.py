@@ -115,6 +115,40 @@ def _usage_totals(history) -> tuple[int, float, str]:
     return total_tokens, total_cost, model
 
 
+def _failure_entries(history) -> list[dict]:
+    """One entry per failed attempt -- stage + a short, factual summary of what
+    went wrong. Feeds harness/lessons_log.py's per-procedure lessons log, which
+    is a RECORD for a human to read, not something fed back into a future
+    prompt automatically (see README.md's "Lessons log" section for why: an
+    automatically-promoted "lesson" extracted from one failure, maybe
+    coincidental, maybe influenced by text this harness didn't author, would
+    become a standing instruction for every future fix on every procedure --
+    promoting one into harness/llm_client.py's STAGE_GUIDANCE is a deliberate,
+    reviewed code change, same as any other).
+
+    Deliberately factual, not the LLM's own rationale text -- that's already
+    scrubbed for a leaked PII shape at the point evolve.py stores it (or
+    withheld entirely), but a failure's own message/details (a DB error, a
+    check's description) hasn't been, so this re-checks before anything here
+    is written to a file this harness commits to git."""
+    from harness.guardrails import contains_likely_leak
+
+    entries = []
+    for it in history:
+        if it.stage in ("guardrail", "connect", "deploy", "exec", "llm"):
+            summary = f"{it.stage}: {it.error}"
+        elif it.stage == "validate" and it.gate_failed:
+            failing = [f"{r.id} ({r.status}): {r.message}" for r in it.results if r.status != "pass"]
+            summary = "validate: " + "; ".join(failing) if failing else "validate: gate failed"
+        else:
+            continue  # a passing attempt isn't a failure to record a lesson about
+        leak = contains_likely_leak(summary)
+        if leak:
+            summary = f"{it.stage}: (withheld: failure summary looked like it contained PII)"
+        entries.append({"attempt": it.attempt, "stage": it.stage, "summary": summary})
+    return entries
+
+
 def _final_fix_rationale(success: bool, history) -> str | None:
     """The LLM's own explanation for the candidate that actually passed -- that
     rationale lives on the iteration BEFORE the last one (evolve() attaches it to
@@ -183,6 +217,7 @@ def write_evolve_report(success: bool, history, output_dir) -> dict:
         "model": model,
         "total_tokens": total_tokens,
         "estimated_cost_usd": round(estimated_cost_usd, 6),
+        "failures": _failure_entries(history),
     }
     (output_dir / "evolve_summary.json").write_text(json.dumps(summary, indent=2, ensure_ascii=False), encoding="utf-8")
     return summary

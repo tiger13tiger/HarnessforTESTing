@@ -56,6 +56,12 @@ never a PR from `dev` or any other branch.
 - `python -m harness.metrics_cli` shows a success rate that isn't quietly
   degrading, and a cost that isn't quietly climbing — worth a glance
   periodically, not just when something's already visibly broken.
+- `reports/lessons/<proc-stem>.jsonl` worth a periodic read, same reason —
+  a procedure that keeps generating new distinct failure patterns (not
+  just repeating the same one, which dedup already collapses to one
+  entry) is a candidate for a human-reviewed addition to
+  `harness/llm_client.py`'s `STAGE_GUIDANCE` — see README.md's "Lessons
+  log" section for why that promotion step stays manual.
 - `tests.yml` is passing on `dev`/`uat`/`main` — it runs the full unit
   suite on every push with no path filter. `promote-dev-to-uat.yml`'s own
   pytest step still only fires alongside a `procs/**.sql`/`tests/**.yaml`

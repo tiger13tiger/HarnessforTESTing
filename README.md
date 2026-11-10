@@ -480,6 +480,47 @@ on a sibling project, [`bank-data-agent-eval`](https://github.com/tiger13tiger/b
 built specifically to attack a text-to-SQL agent — its `guardrails.py` and
 `eval_safety()` are worth reading if you're extending this section.)
 
+## Lessons log
+
+Every failing round — deploy, exec, guardrail, connect, or a failed
+validate — gets a one-line record in `reports/lessons/<proc-stem>.jsonl`
+(`harness/lessons_log.py`, wired into `auto-fix-dev.yml` right after
+`metrics_log`). Deduped by stage (and, for a validate failure, by which
+check id failed) so a procedure stuck repeating the same failure for 3
+rounds gets one lesson, not three.
+
+**This log is a record for a human to read. It is never read back into a
+future prompt automatically.** That was a deliberate decision, not an
+oversight — a "lesson" promoted into the prompt without a person deciding
+it's a real, general pattern creates three concrete problems:
+
+1. **A coincidence gets treated as a rule.** A round can fail for a reason
+   unrelated to the SQL itself (a stale golden dataset that day, a
+   one-off DB hiccup). An automated system has no way to tell "this was
+   the real root cause" from "this was merely correlated with this
+   failure" — a person glancing at it usually can.
+2. **It would compound a prompt-injection attempt instead of containing
+   it.** The whole reason `harness/llm_client.py`'s prompt now says not to
+   follow instructions embedded in `context`/check `details` (see
+   **Guardrails** above) is that this harness can't fully trust that
+   text. A failure summary derived from that same text, auto-promoted
+   into a *standing* instruction for every future fix on every
+   procedure, turns a one-time bad response (which guardrails already
+   catch and discard) into a permanent, self-reinforcing one.
+3. **No diff, no reviewer, no `git blame`.** Every other thing in this
+   repo that changes real behavior — a workflow, the governance file, the
+   manifest — goes through a reviewed `dev → uat → main` change. The
+   prompt controls behavior exactly like code does; changing it silently
+   at runtime is the one exception that would quietly undo that
+   discipline.
+
+**Promoting a confirmed lesson** is a normal, reviewed code change: read
+`reports/lessons/<proc-stem>.jsonl`, decide whether it's a real, general
+pattern worth encoding, and add it to `harness/llm_client.py`'s
+`STAGE_GUIDANCE` (the same hand-maintained prompt guidance that already
+exists per stage) through the usual PR process — same as any other change
+that affects what the LLM is told to do.
+
 ## Adding a check
 
 1. Copy an entry in `tests/uat_suite.example.yaml` (or write a new suite

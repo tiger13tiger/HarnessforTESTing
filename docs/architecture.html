@@ -353,7 +353,7 @@ footer {
   <section>
     <h2>Figure 2</h2>
     <div class="section-title">Inside one evolve() attempt</div>
-    <p class="lead">This is what runs on <code>dev</code> — by a person, or by <code>evolve_cli.py</code> asking an LLM for a fix. Up to 5 attempts. The transaction boundary and the guardrail-before-deploy order are the two decisions the whole safety story rests on. <code>guardrails.py</code> checks more than it used to: a second statement smuggled in after the procedure's own closing <code>END</code>, and a reference to any table on a PII blocklist, not just TRUNCATE/DROP targets. What's new and not shown as its own box below: right after the LLM responds, its rationale and SQL are scanned for anything that looks like an email/SSN/phone before either is stored anywhere — a leak is withheld, replacing the stored rationale with a placeholder, before it could reach a report or a public commit message.</p>
+    <p class="lead">This is what runs on <code>dev</code> — by a person, or by <code>evolve_cli.py</code> asking an LLM for a fix. Up to 5 attempts. The transaction boundary and the guardrail-before-deploy order are the two decisions the whole safety story rests on. <code>guardrails.py</code> checks more than it used to: a second statement smuggled in after the procedure's own closing <code>END</code>, and a reference to any table on a PII blocklist, not just TRUNCATE/DROP targets. What's new and not shown as its own box below: right after the LLM responds, its rationale and SQL are scanned for anything that looks like an email/SSN/phone before either is stored anywhere — a leak is withheld, replacing the stored rationale with a placeholder, before it could reach a report or a public commit message. Every round that fails also records a one-line lesson (<code>harness/lessons_log.py</code>, deduped so a repeated failure doesn't spam the log) — a record for a human to read, never fed back into a future prompt automatically; see README.md's "Lessons log" section for why not.</p>
 
     <div class="legend">
       <span><span class="swatch" style="background:var(--accent)"></span>normal path</span>
@@ -529,6 +529,7 @@ footer {
   metrics_cli.py         <span class="comment"># success-rate / cost / per-model summary from that log, run on demand</span>
   governance_check.py    <span class="comment"># the YAML-reading check; also called directly by DeepSeekLLMClient.__init__ (the real enforcement point)</span>
   rationale_cli.py       <span class="comment"># prints an evolve_summary.json's rationale -- a real module, not inline YAML python</span>
+  lessons_log.py          <span class="comment"># per-procedure distinct-failure-pattern log -- a record for a human, never auto-fed back into a prompt</span>
   <span class="dir">checks/</span>               <span class="comment"># the seven check types (table above)</span>
   cli.py · evolve_cli.py · promote_cli.py · benchmark_cli.py
 
