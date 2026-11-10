@@ -3,8 +3,8 @@
 -- with a duplicate promotion row) double-counts any sale from those stores.
 -- The fixed version lives at procs/sp_refresh_fact_sales.example.sql; this file
 -- is a frozen copy of the bug for the LLM to find on its own.
--- Re-triggering end-to-end test now that GH_PAT is confirmed set and the
--- 40613 transient-error classification bug in connector.py is fixed.
+-- Re-triggering end-to-end test now that GH_PAT, the transient-error fix,
+-- and the rotated Azure SQL credentials are all confirmed in place.
 CREATE OR ALTER PROCEDURE dbo.sp_refresh_fact_sales
 AS
 BEGIN
