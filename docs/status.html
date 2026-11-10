@@ -339,6 +339,7 @@ async function loadMetrics() {
 }
 
 const WORKFLOWS = [
+  { file: 'tests.yml', label: 'tests (unit suite, every push/PR)' },
   { file: 'promote-dev-to-uat.yml', label: 'promote-dev-to-uat (Gate 1)' },
   { file: 'uat-to-prd-gate.yml', label: 'uat-to-prd-gate (Gate 2, human review)' },
   { file: 'secrets-smoke-test.yml', label: 'secrets-smoke-test (daily)' },
