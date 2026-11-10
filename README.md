@@ -20,7 +20,10 @@ It follows a `dev` → `uat` → `main` (prd) branch flow:
 3. **uat → prd** — the one manual gate. A human (the test analyst) opens a
    PR from `uat` into `main`; `.github/workflows/uat-to-prd-gate.yml`
    re-validates against UAT as a required check, but merging stays a human
-   decision.
+   decision. A branch-protection ruleset on `main` now actually enforces
+   this — requiring a PR and a passing `validate` check, confirmed by
+   pushing straight to `main` and watching GitHub reject it — rather than
+   relying on nobody breaking convention.
 
 This maps directly onto the existing process: dev and uat are where
 iteration happens freely, and prd only ever gets what a person actually
@@ -426,16 +429,6 @@ nobody got around to it.
   file names the env var to read; how those secrets get into the shell
   (Azure Key Vault, GitHub Actions secrets, Azure DevOps variable groups,
   etc.) is outside this harness's scope.
-- **Branch protection on `main`**: the one human-reviewed gate
-  (`uat-to-prd-gate.yml`) is only as real as GitHub's branch protection
-  makes it — without a rule requiring a PR and a passing `validate` check
-  on `main`, anyone with write access can bypass it with a direct push.
-  This harness can't set that for you (no available tool exposes GitHub's
-  branch-protection API); add it yourself under **Settings → Branches**
-  on `main` — require a pull request, require the `validate` status
-  check, and *don't* require an approval count greater than 0 unless
-  there's more than one collaborator, or you'll lock yourself out of
-  merging your own PRs.
 - **Branch protection on `uat`**: the promotion workflow pushes directly to
   `uat`. If you add a required-review rule there later, exempt the
   workflow's token or switch that step to a PR + auto-merge.
