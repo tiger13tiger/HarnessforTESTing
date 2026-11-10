@@ -1,21 +1,51 @@
 """Connections to Azure Synapse SQL, for executing test queries and -- for the
 evolve loop -- deploying/running a candidate stored procedure."""
 import os
+import re
 import time
 
-TRANSIENT_SQLSTATES = {"08S01", "HYT00", "40001", "40613"}
+# ODBC-level SQLSTATEs worth retrying (deadlock, login timeout, network blip).
+# pyodbc.Error's first arg is this generic ODBC state, e.g. '08S01' -- it is
+# NOT where Azure SQL's own error numbers show up (see below).
+TRANSIENT_SQLSTATES = {"08S01", "HYT00", "40001"}
+
+# Azure SQL Database's own transient error numbers (not ODBC SQLSTATEs): a
+# resuming serverless database, throttling, failover, resource-governor
+# limits. pyodbc surfaces these only inside the message text, generically
+# tagged SQLSTATE 'HY000' -- e.g. "...is not currently available... (40613)
+# (SQLDriverConnect)" -- so args[0] alone (the old check) never catches this
+# class of error; a real serverless-tier "database is paused" response hits
+# exactly this path and was never actually retried before this fix.
+TRANSIENT_AZURE_ERROR_NUMBERS = {
+    "4060", "40197", "40501", "40613", "49918", "49919", "49920", "4221", "40143",
+}
+_AZURE_ERROR_NUMBER_RE = re.compile(r"\((\d+)\)")
 
 
 class TransientError(Exception):
-    """A connection/query error worth retrying (deadlock, timeout, throttling)."""
+    """A connection/query error worth retrying (deadlock, timeout, throttling,
+    a serverless database resuming from auto-pause)."""
 
 
-def open_transaction_with_retries(connector, retries: int = 2) -> "SynapseTransaction":
+def _is_transient(exc: Exception) -> bool:
+    sqlstate = exc.args[0] if exc.args else ""
+    if sqlstate in TRANSIENT_SQLSTATES:
+        return True
+    return bool(_AZURE_ERROR_NUMBER_RE.search(str(exc)) and any(
+        num in TRANSIENT_AZURE_ERROR_NUMBERS for num in _AZURE_ERROR_NUMBER_RE.findall(str(exc))
+    ))
+
+
+def open_transaction_with_retries(connector, retries: int = 6, max_backoff: int = 20) -> "SynapseTransaction":
     """Opens a transaction, retrying on TransientError (login timeout, deadlock,
-    throttling) with backoff -- so a connection blip doesn't crash the caller with
+    throttling, a serverless database waking up from auto-pause) with capped
+    exponential backoff -- so a connection blip doesn't crash the caller with
     an unhandled exception the way a bare connector.transaction() call would.
-    Callers in promote.py/evolve.py use this instead of calling transaction()
-    directly; a persistent failure still raises after retries are exhausted."""
+    6 retries capped at 20s each (2+4+8+16+20+20 = 70s total) comfortably
+    covers a cold serverless resume, which Azure documents as usually under
+    30s but occasionally longer. Callers in promote.py/evolve.py use this
+    instead of calling transaction() directly; a persistent failure still
+    raises after retries are exhausted."""
     last_exc = None
     for attempt in range(retries + 1):
         try:
@@ -23,7 +53,7 @@ def open_transaction_with_retries(connector, retries: int = 2) -> "SynapseTransa
         except TransientError as exc:
             last_exc = exc
             if attempt < retries:
-                time.sleep(2 ** (attempt + 1))
+                time.sleep(min(2 ** (attempt + 1), max_backoff))
     raise last_exc
 
 
@@ -56,8 +86,7 @@ class SynapseConnector:
                 columns = [c[0] for c in cursor.description]
                 return [dict(zip(columns, row)) for row in cursor.fetchall()]
         except pyodbc.Error as exc:
-            sqlstate = exc.args[0] if exc.args else ""
-            if sqlstate in TRANSIENT_SQLSTATES:
+            if _is_transient(exc):
                 raise TransientError(str(exc)) from exc
             raise
 
@@ -75,8 +104,7 @@ class SynapseConnector:
                 cursor = conn.cursor()
                 cursor.execute(sql, params or [])
         except pyodbc.Error as exc:
-            sqlstate = exc.args[0] if exc.args else ""
-            if sqlstate in TRANSIENT_SQLSTATES:
+            if _is_transient(exc):
                 raise TransientError(str(exc)) from exc
             raise
 
@@ -92,8 +120,7 @@ class SynapseConnector:
             conn = pyodbc.connect(self.conn_str, timeout=self.query_timeout, autocommit=False)
             conn.timeout = self.query_timeout
         except pyodbc.Error as exc:
-            sqlstate = exc.args[0] if exc.args else ""
-            if sqlstate in TRANSIENT_SQLSTATES:
+            if _is_transient(exc):
                 raise TransientError(str(exc)) from exc
             raise
         return SynapseTransaction(conn)
@@ -114,8 +141,7 @@ class SynapseTransaction:
             cursor = self._conn.cursor()
             cursor.execute(sql, params or [])
         except pyodbc.Error as exc:
-            sqlstate = exc.args[0] if exc.args else ""
-            if sqlstate in TRANSIENT_SQLSTATES:
+            if _is_transient(exc):
                 raise TransientError(str(exc)) from exc
             raise
 
@@ -130,8 +156,7 @@ class SynapseTransaction:
             columns = [c[0] for c in cursor.description]
             return [dict(zip(columns, row)) for row in cursor.fetchall()]
         except pyodbc.Error as exc:
-            sqlstate = exc.args[0] if exc.args else ""
-            if sqlstate in TRANSIENT_SQLSTATES:
+            if _is_transient(exc):
                 raise TransientError(str(exc)) from exc
             raise
 

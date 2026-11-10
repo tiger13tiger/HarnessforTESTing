@@ -86,17 +86,24 @@ def main(argv=None) -> int:
         print(f"error: {exc}", file=sys.stderr)
         return 1
 
-    success, history = evolve(
-        initial_sql=initial_sql,
-        exec_statement=args.exec_statement,
-        validation_suite=suite,
-        connector=connector,
-        llm_client=llm_client,
-        allowed_schema=args.allowed_schema,
-        context=f"Candidate procedure file: {args.proc}",
-        max_iterations=args.max_iterations,
-        llm_retries=args.llm_retries,
-    )
+    try:
+        success, history = evolve(
+            initial_sql=initial_sql,
+            exec_statement=args.exec_statement,
+            validation_suite=suite,
+            connector=connector,
+            llm_client=llm_client,
+            allowed_schema=args.allowed_schema,
+            context=f"Candidate procedure file: {args.proc}",
+            max_iterations=args.max_iterations,
+            llm_retries=args.llm_retries,
+        )
+    except Exception as exc:  # noqa: BLE001 - evolve() already handles GuardrailViolation
+        # and a retried-out TransientError internally; this catches what it can't, e.g. a
+        # permanent (non-transient) connection error like bad credentials -- caught by a
+        # real CI run that surfaced a raw traceback instead of a clean error here
+        print(f"error: {type(exc).__name__}: {exc}", file=sys.stderr)
+        return 1
 
     write_evolve_report(success, history, args.output_dir)
 
