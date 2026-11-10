@@ -104,6 +104,11 @@ never a PR from `dev` or any other branch.
   should only ever happen as its own reviewed change, with
   `approved_by`/`approved_at` actually filled in, not bundled quietly
   into an unrelated commit.
+- A table *removed* from `infra/blocked_tables.yaml` — unlike the
+  governance file, adding an entry here is always safe (more restrictive);
+  removing one is the sensitive direction, and should be its own reviewed
+  change with a stated reason, not a line that quietly disappeared inside
+  an unrelated diff.
 - `validate-after-merge` failing on a run where `promote` passed — the
   candidate alone was fine, but something about the merge or the UAT
   database's state right after wasn't. Worth a closer look even once the
