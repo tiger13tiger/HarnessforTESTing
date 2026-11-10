@@ -218,9 +218,26 @@ python -m harness.promote_cli \
     --conn-env SYNAPSE_UAT_CONN_STR
 ```
 
-This workflow hardcodes one proc/suite as a worked example; with more than
-one stored procedure under test, replace that step with a loop over a
-manifest file mapping each `procs/*.sql` to its suite and EXEC statement.
+Every stage actually loops over `procs/manifest.yaml` (`harness/manifest.py`),
+not just the one worked example — add a new procedure by adding an entry
+there:
+
+```yaml
+procedures:
+  - proc: procs/sp_refresh_fact_sales.example.sql
+    suite: tests/golden_fact_sales.example.yaml
+    exec_statement: "EXEC dbo.sp_refresh_fact_sales"
+    allowed_schema: dbo
+```
+
+`python -m harness.manifest procs/manifest.yaml --tsv` prints one
+tab-separated line per entry; every workflow step that deploys/validates
+reads the manifest this way and calls the usual CLI once per entry, each
+getting its own `reports/<proc-stem>/` output directory so one procedure's
+report can't silently overwrite another's. Nothing in `harness/promote.py`,
+`harness/evolve.py`, or their CLIs changed for this — the looping is pure
+orchestration at the workflow level around the same single-procedure
+interface each already had.
 
 ### After the merge: re-validate what actually landed in uat
 
@@ -314,6 +331,60 @@ SYNAPSE_DEV_CONN_STR="..." SYNAPSE_UAT_CONN_STR="..." DEEPSEEK_API_KEY="..." GH_
     python -m harness.secrets_check
 ```
 
+## Cost and model-drift observability
+
+Every real `AnthropicLLMClient`/`DeepSeekLLMClient` call now returns its
+token usage alongside the fix (`harness/llm_client.py`'s `FixSuggestion.usage`),
+which `evolve()` carries through to each `Iteration` and
+`write_evolve_report` (`harness/report.py`) totals into
+`evolve_summary.json`: `total_tokens`, `estimated_cost_usd` (from a
+`PRICING_PER_1K_TOKENS` table — a point-in-time estimate, not an invoice;
+an unknown model id contributes `$0` rather than breaking the run), and
+`model` (the id actually used, for correlating a fix-rate change with a
+provider quietly changing what a generic alias like `deepseek-chat` points
+to).
+
+`auto-fix-dev.yml` appends one line per attempt — converged or not, since
+a failure is exactly the data point that matters for a success-rate trend
+— to `reports/metrics_log.jsonl` (`harness/metrics_log.py`), committed to
+`dev` alongside (or instead of, when nothing converged) the fix itself.
+It's deliberately a plain git-tracked file, not a dashboard or an
+artifact that expires: durable, diffable, and already in a place this
+repo commits to anyway.
+
+Read the trend on demand:
+
+```bash
+python -m harness.metrics_cli --log reports/metrics_log.jsonl
+# success rate, total tokens/cost, and a per-model breakdown
+```
+
+There's no scheduled workflow or live dashboard wired up for this yet —
+with one procedure logging to this file today, that would be
+infrastructure for a problem that doesn't exist. The log format is what a
+future dashboard would read from, if/when that's actually warranted.
+
+## Data-governance gate for DeepSeek
+
+DeepSeek is a China-based provider; sending a real procedure's schema and
+logic to it is an offshore data transfer that needs sign-off from
+whoever owns data governance before it's used on anything beyond this
+repo's synthetic demo data. That requirement used to live only in a
+comment. It's now a real, enforced gate:
+`infra/deepseek_governance_approval.yaml` ships with `approved: false`,
+and `auto-fix-dev.yml` runs `python -m harness.governance_check`
+(`harness/governance_check.py`) right before it ever calls DeepSeek — a
+missing file, `approved: false`, or an `approved: true` with no
+`approved_by`/`approved_at` filled in all fail the job loudly instead of
+silently sending data.
+
+**This gate being technically enforced does not mean the compliance work
+is done.** Getting that sign-off and editing the file (`approved: true`,
+who approved it, when) is still entirely a decision for your organization
+to make — not something this harness can do on its own. The point is
+narrower: that decision can no longer be silently skipped just because
+nobody got around to it.
+
 ## Adding a check
 
 1. Copy an entry in `tests/uat_suite.example.yaml` (or write a new suite
@@ -329,14 +400,20 @@ SYNAPSE_DEV_CONN_STR="..." SYNAPSE_UAT_CONN_STR="..." DEEPSEEK_API_KEY="..." GH_
   repo, not PRD itself — hooking that merge up to your real PRD deployment
   process (however you currently push to PRD) is outside this harness's
   scope.
-- **Multi-procedure manifest**: both `promote-dev-to-uat.yml` and
-  `uat-to-prd-gate.yml` hardcode one proc/suite pair as a worked example.
-  Generalizing to "every `.sql` under `procs/` with its own suite" needs a
-  small manifest file and a loop in those two workflows.
 - **Per-environment connection management**: `connection_env` in the suite
   file names the env var to read; how those secrets get into the shell
   (Azure Key Vault, GitHub Actions secrets, Azure DevOps variable groups,
   etc.) is outside this harness's scope.
+- **Branch protection on `main`**: the one human-reviewed gate
+  (`uat-to-prd-gate.yml`) is only as real as GitHub's branch protection
+  makes it — without a rule requiring a PR and a passing `validate` check
+  on `main`, anyone with write access can bypass it with a direct push.
+  This harness can't set that for you (no available tool exposes GitHub's
+  branch-protection API); add it yourself under **Settings → Branches**
+  on `main` — require a pull request, require the `validate` status
+  check, and *don't* require an approval count greater than 0 unless
+  there's more than one collaborator, or you'll lock yourself out of
+  merging your own PRs.
 - **Branch protection on `uat`**: the promotion workflow pushes directly to
   `uat`. If you add a required-review rule there later, exempt the
   workflow's token or switch that step to a PR + auto-merge.

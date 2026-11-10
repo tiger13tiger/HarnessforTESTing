@@ -13,6 +13,7 @@ from dataclasses import dataclass
 class FixSuggestion:
     sql: str
     rationale: str
+    usage: dict | None = None  # {"input_tokens": int, "output_tokens": int} when a real client set it
 
 
 class LLMClient:
@@ -23,9 +24,10 @@ class LLMClient:
 class MockLLMClient(LLMClient):
     """Returns pre-scripted fixes in order, for unit-testing the evolve loop."""
 
-    def __init__(self, responses: list[FixSuggestion]):
+    def __init__(self, responses: list[FixSuggestion], model: str = "mock"):
         self._responses = list(responses)
         self.calls: list[dict] = []
+        self.model = model  # evolve() reads this to tag each Iteration, same as a real client
 
     def suggest_fix(self, original_sql, failing_checks, context, stage="validate"):
         self.calls.append({"original_sql": original_sql, "failing_checks": failing_checks, "context": context, "stage": stage})
@@ -54,7 +56,8 @@ class AnthropicLLMClient(LLMClient):
         text = response.content[0].text
         match = re.search(r"```sql\s*(.*?)```", text, re.DOTALL | re.IGNORECASE)
         sql = match.group(1).strip() if match else text.strip()
-        return FixSuggestion(sql=sql, rationale=text)
+        usage = {"input_tokens": response.usage.input_tokens, "output_tokens": response.usage.output_tokens}
+        return FixSuggestion(sql=sql, rationale=text, usage=usage)
 
 
 class DeepSeekLLMClient(LLMClient):
@@ -82,10 +85,16 @@ class DeepSeekLLMClient(LLMClient):
             timeout=120,
         )
         response.raise_for_status()
-        text = response.json()["choices"][0]["message"]["content"]
+        payload = response.json()
+        text = payload["choices"][0]["message"]["content"]
         match = re.search(r"```sql\s*(.*?)```", text, re.DOTALL | re.IGNORECASE)
         sql = match.group(1).strip() if match else text.strip()
-        return FixSuggestion(sql=sql, rationale=text)
+        raw_usage = payload.get("usage") or {}
+        usage = {
+            "input_tokens": raw_usage.get("prompt_tokens", 0),
+            "output_tokens": raw_usage.get("completion_tokens", 0),
+        }
+        return FixSuggestion(sql=sql, rationale=text, usage=usage)
 
 
 # Typed repair routing (SIRIUS-SQL's term for this): a deploy-time syntax error, a

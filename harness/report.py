@@ -79,6 +79,42 @@ def _closest_iteration(history):
     return min(candidates, key=lambda it: sum(1 for r in it.results if r.status != "pass"))
 
 
+# Point-in-time estimates only -- check the provider's own pricing page for
+# current rates before trusting this for a real budget decision. An unknown
+# model id contributes $0 rather than raising: a stale or missing price
+# entry must never break the actual pipeline run over a cost estimate.
+PRICING_PER_1K_TOKENS = {
+    "deepseek-chat": {"input": 0.00014, "output": 0.00028},
+    "claude-opus-5-5": {"input": 0.015, "output": 0.075},
+}
+
+
+def _estimate_cost(model: str, usage: dict | None) -> float:
+    if not usage:
+        return 0.0
+    prices = PRICING_PER_1K_TOKENS.get(model)
+    if prices is None:
+        return 0.0
+    input_tokens = usage.get("input_tokens", 0)
+    output_tokens = usage.get("output_tokens", 0)
+    return (input_tokens / 1000) * prices["input"] + (output_tokens / 1000) * prices["output"]
+
+
+def _usage_totals(history) -> tuple[int, float, str]:
+    """Total tokens, total estimated cost, and the model id used (for later
+    drift correlation -- did the fix rate change right when this id's
+    behavior changed) across every LLM call in this run."""
+    total_tokens = 0
+    total_cost = 0.0
+    model = ""
+    for it in history:
+        if it.usage:
+            total_tokens += it.usage.get("input_tokens", 0) + it.usage.get("output_tokens", 0)
+            total_cost += _estimate_cost(it.model, it.usage)
+            model = it.model or model
+    return total_tokens, total_cost, model
+
+
 def _final_fix_rationale(success: bool, history) -> str | None:
     """The LLM's own explanation for the candidate that actually passed -- that
     rationale lives on the iteration BEFORE the last one (evolve() attaches it to
@@ -138,11 +174,15 @@ def write_evolve_report(success: bool, history, output_dir) -> dict:
 
     (output_dir / "evolve_report.md").write_text("\n".join(lines), encoding="utf-8")
 
+    total_tokens, estimated_cost_usd, model = _usage_totals(history)
     summary = {
         "success": success,
         "iterations": len(history),
         "closest_attempt": closest.attempt if closest is not None else None,
         "rationale": _final_fix_rationale(success, history),
+        "model": model,
+        "total_tokens": total_tokens,
+        "estimated_cost_usd": round(estimated_cost_usd, 6),
     }
     (output_dir / "evolve_summary.json").write_text(json.dumps(summary, indent=2, ensure_ascii=False), encoding="utf-8")
     return summary

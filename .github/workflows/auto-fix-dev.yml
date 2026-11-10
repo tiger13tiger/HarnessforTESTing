@@ -22,6 +22,23 @@ name: Auto-fix dev (reusable)
 # just stop with no error and no second attempt. Create a classic or
 # fine-grained PAT with write access to this repo's contents and store it as
 # the GH_PAT repo secret.
+#
+# Loops over procs/manifest.yaml so a manifest with more than one procedure
+# gets every failing one sent to the LLM in this one job -- a partial
+# convergence (some fixed, some not) still commits and pushes whatever did
+# converge, so the next round only has to retry what's left. Every attempt,
+# converged or not, is logged to reports/metrics_log.jsonl (harness/
+# metrics_log.py) for later success-rate/cost trend analysis
+# (harness/metrics_cli.py) -- that log always gets committed even when no
+# procedure actually changed, since the failure itself is the data point
+# that matters for drift detection; it deliberately does NOT live under
+# procs/**.sql or tests/**.yaml, so a metrics-only push never by itself
+# re-triggers promote-dev-to-uat.yml.
+#
+# DeepSeek is a China-based provider; harness/governance_check.py blocks
+# this job before it ever calls the LLM unless
+# infra/deepseek_governance_approval.yaml has a real, filled-in sign-off --
+# see that file for why.
 
 on:
   workflow_call:
@@ -69,18 +86,34 @@ jobs:
           fi
           echo "next_round=$NEXT_ROUND" >> "$GITHUB_OUTPUT"
 
-      - name: Ask the LLM to fix the procedure against DEV
+      - name: Check DeepSeek governance approval
+        run: python -m harness.governance_check
+
+      - name: Ask the LLM to fix each failing procedure against DEV
         env:
           SYNAPSE_DEV_CONN_STR: ${{ secrets.SYNAPSE_DEV_CONN_STR }}
           DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
         run: |
-          python -m harness.evolve_cli \
-            --proc procs/sp_refresh_fact_sales.example.sql \
-            --exec-statement "EXEC dbo.sp_refresh_fact_sales" \
-            --suite tests/golden_fact_sales.example.yaml \
-            --allowed-schema dbo \
-            --conn-env SYNAPSE_DEV_CONN_STR \
-            --provider deepseek
+          FAILED=0
+          while IFS=$'\t' read -r proc suite exec_stmt schema; do
+            echo "::group::$proc"
+            OUTPUT_DIR="reports/$(basename "$proc" .sql)"
+            python -m harness.evolve_cli \
+              --proc "$proc" \
+              --exec-statement "$exec_stmt" \
+              --suite "$suite" \
+              --allowed-schema "$schema" \
+              --conn-env SYNAPSE_DEV_CONN_STR \
+              --provider deepseek \
+              --output-dir "$OUTPUT_DIR" || FAILED=1
+            python -m harness.metrics_log \
+              --log reports/metrics_log.jsonl \
+              --proc "$proc" \
+              --round "${{ steps.round.outputs.next_round }}" \
+              --evolve-summary "$OUTPUT_DIR/evolve_summary.json"
+            echo "::endgroup::"
+          done < <(python -m harness.manifest procs/manifest.yaml --tsv)
+          exit $FAILED
 
       - name: Upload report
         if: always()
@@ -90,27 +123,51 @@ jobs:
           path: reports/
           if-no-files-found: ignore
 
-      - name: Commit and push the fix back to dev
+      - name: Commit and push whatever converged back to dev
+        # Always runs, even if the LLM step above failed for some procedures --
+        # a partial convergence (some fixed, some not) still commits and pushes
+        # what did converge, and the metrics log entry gets recorded either way.
+        if: always()
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          if git diff --quiet -- procs/sp_refresh_fact_sales.example.sql; then
-            echo "No change produced by the LLM; nothing to push."
-            exit 0
-          fi
-          RATIONALE="$(python3 -c "
+
+          echo "Auto-fix after UAT rejection [auto-fix round ${{ steps.round.outputs.next_round }}/3]" > /tmp/commit_message.txt
+
+          while IFS=$'\t' read -r proc suite exec_stmt schema; do
+            if git diff --quiet -- "$proc"; then
+              continue
+            fi
+            git add "$proc"
+            OUTPUT_DIR="reports/$(basename "$proc" .sql)"
+            {
+              echo ""
+              echo "## $proc"
+              echo "LLM-generated fix via evolve_cli.py --provider deepseek -- not reviewed by a human before landing on dev (by design; that happens at the uat -> main PR). Rationale from the LLM:"
+              echo ""
+              python3 -c "
           import json
           try:
-              with open('reports/evolve_summary.json') as f:
+              with open('$OUTPUT_DIR/evolve_summary.json') as f:
                   data = json.load(f)
               print(data.get('rationale') or '(no rationale recorded by evolve_cli.py for this run)')
           except FileNotFoundError:
-              print('(reports/evolve_summary.json not found)')
-          ")"
-          git add procs/sp_refresh_fact_sales.example.sql
-          git commit \
-            -m "Auto-fix after UAT rejection [auto-fix round ${{ steps.round.outputs.next_round }}/3]" \
-            -m "LLM-generated fix via evolve_cli.py --provider deepseek -- not reviewed by a human before landing on dev (by design; that happens at the uat -> main PR). Rationale from the LLM:" \
-            -m "$RATIONALE" \
-            -m "Full iteration history: the auto-fix-report artifact on this workflow run."
+              print('($OUTPUT_DIR/evolve_summary.json not found)')
+          "
+            } >> /tmp/commit_message.txt
+          done < <(python -m harness.manifest procs/manifest.yaml --tsv)
+
+          git add reports/metrics_log.jsonl 2>/dev/null || true
+
+          {
+            echo ""
+            echo "Full iteration history: the auto-fix-report artifact on this workflow run."
+          } >> /tmp/commit_message.txt
+
+          if git diff --cached --quiet; then
+            echo "Nothing staged -- no procedure changed and no new metrics log entry; nothing to push."
+            exit 0
+          fi
+
+          git commit -F /tmp/commit_message.txt
           git push origin HEAD:dev

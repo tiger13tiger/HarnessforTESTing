@@ -40,10 +40,20 @@ jobs:
       - name: Run unit tests (no Synapse connection needed)
         run: python -m pytest -q
 
-      - name: Re-validate against UAT
+      - name: Re-validate against UAT (every procedure in the manifest)
         env:
           SYNAPSE_UAT_CONN_STR: ${{ secrets.SYNAPSE_UAT_CONN_STR }}
-        run: python -m harness.cli --config tests/golden_fact_sales.example.yaml --conn-env SYNAPSE_UAT_CONN_STR
+        run: |
+          FAILED=0
+          while IFS=$'\t' read -r proc suite exec_stmt schema; do
+            echo "::group::$suite"
+            python -m harness.cli \
+              --config "$suite" \
+              --conn-env SYNAPSE_UAT_CONN_STR \
+              --output-dir "reports/$(basename "$proc" .sql)" || FAILED=1
+            echo "::endgroup::"
+          done < <(python -m harness.manifest procs/manifest.yaml --tsv)
+          exit $FAILED
 
       - name: Upload report
         if: always()
