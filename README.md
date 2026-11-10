@@ -27,6 +27,8 @@ signed off on.
 
 See [`docs/architecture.html`](docs/architecture.html) for a diagrammed walkthrough of this pipeline and of the `evolve()` fix loop's internals, and `PROCESS.md` for what a healthy pipeline state looks like.
 
+**Live status**: [`docs/status.html`](docs/status.html) (served via GitHub Pages at `https://tiger13tiger.github.io/HarnessforTESTing/status.html` once Pages is enabled) fetches the DeepSeek governance gate's state and the model-drift/cost log straight from the repo on every load — it's live data, not a screenshot.
+
 ## Why this shape
 
 This harness borrows a few ideas from an AI-agent evaluation framework
