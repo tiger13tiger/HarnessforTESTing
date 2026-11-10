@@ -9,9 +9,17 @@ name: UAT -> PRD Gate (human-reviewed)
 on:
   pull_request:
     branches: [main]
-    paths:
-      - "procs/**.sql"
-      - "tests/**.yaml"
+
+# Deliberately NO paths filter here, unlike promote-dev-to-uat.yml -- this
+# job is a required status check in main's branch-protection ruleset. A
+# required check that only runs when procs/**.sql or tests/**.yaml changes
+# never reports anything on a docs/code-only PR, and GitHub shows that PR as
+# permanently "Expected -- waiting for status to be reported": there's
+# nothing to wait for, since the workflow structurally can't fire. This
+# workflow always runs instead, and the "Check whether this PR touches
+# procs/tests" step below decides internally whether there's anything to
+# actually validate -- so the job always posts a real pass, not a forever-
+# pending check.
 
 permissions:
   contents: read
@@ -29,12 +37,33 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Check whether this PR touches procs/**.sql or tests/**.yaml
+        id: filter
+        run: |
+          CHANGED="$(git diff --name-only "origin/${{ github.base_ref }}...HEAD")"
+          echo "Changed files in this PR:"
+          echo "$CHANGED"
+          if echo "$CHANGED" | grep -qE '^(procs/.*\.sql|tests/.*\.yaml)$'; then
+            echo "relevant=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "relevant=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Nothing to validate -- no procs/tests change in this PR
+        if: steps.filter.outputs.relevant == 'false'
+        run: |
+          echo "No procs/**.sql or tests/**.yaml changed in this PR, so there's nothing for a live UAT re-validation to check. Passing this required check on that basis, instead of leaving it permanently pending -- see this workflow's top-of-file comment for why that matters."
 
       - uses: actions/setup-python@v5
+        if: steps.filter.outputs.relevant == 'true'
         with:
           python-version: "3.12"
 
       - name: Install the Microsoft ODBC driver for SQL Server
+        if: steps.filter.outputs.relevant == 'true'
         run: |
           curl -sSL -O https://packages.microsoft.com/config/ubuntu/22.04/packages-microsoft-prod.deb
           sudo dpkg -i packages-microsoft-prod.deb
@@ -42,12 +71,15 @@ jobs:
           sudo ACCEPT_EULA=Y apt-get install -y msodbcsql18
 
       - name: Install dependencies
+        if: steps.filter.outputs.relevant == 'true'
         run: pip install -r requirements.txt
 
       - name: Run unit tests (no Synapse connection needed)
+        if: steps.filter.outputs.relevant == 'true'
         run: python -m pytest -q
 
       - name: Re-validate against UAT (every procedure in the manifest)
+        if: steps.filter.outputs.relevant == 'true'
         env:
           SYNAPSE_UAT_CONN_STR: ${{ secrets.SYNAPSE_UAT_CONN_STR }}
         run: |
@@ -63,7 +95,7 @@ jobs:
           exit $FAILED
 
       - name: Upload report
-        if: always()
+        if: always() && steps.filter.outputs.relevant == 'true'
         uses: actions/upload-artifact@v4
         with:
           name: uat-validation-report

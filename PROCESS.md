@@ -57,11 +57,19 @@ never a PR from `dev` or any other branch.
   degrading, and a cost that isn't quietly climbing — worth a glance
   periodically, not just when something's already visibly broken.
 - `tests.yml` is passing on `dev`/`uat`/`main` — it runs the full unit
-  suite on every push with no path filter, unlike `promote-dev-to-uat.yml`
-  and `uat-to-prd-gate.yml`'s own pytest steps, which only fire alongside a
-  `procs/**.sql`/`tests/**.yaml` change. A `harness/**.py`-only change
-  still won't trigger live UAT validation (correct — it doesn't need a
-  database round-trip), but it should still show a green `tests.yml` run.
+  suite on every push with no path filter. `promote-dev-to-uat.yml`'s own
+  pytest step still only fires alongside a `procs/**.sql`/`tests/**.yaml`
+  change (it's part of a job that also does a live UAT deploy, which
+  genuinely shouldn't run for an unrelated change). `uat-to-prd-gate.yml`
+  is different on purpose: the `validate` job itself always runs (it's a
+  required branch-protection status check on `main`, and a required check
+  gated by a path filter never reports anything — and never stops being
+  "pending" — on a PR that doesn't touch that path), but its pytest/live-
+  validation steps are skipped internally via a git-diff check when the PR
+  doesn't touch `procs/**.sql`/`tests/**.yaml`. A `harness/**.py`-only
+  change still won't trigger a live UAT re-validation (correct — it
+  doesn't need a database round-trip), but it should show a green
+  `tests.yml` run and a green (not perpetually pending) `validate` check.
 
 ## Red flags — stop and look
 
