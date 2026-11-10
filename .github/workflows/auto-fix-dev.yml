@@ -145,15 +145,7 @@ jobs:
               echo "## $proc"
               echo "LLM-generated fix via evolve_cli.py --provider deepseek -- not reviewed by a human before landing on dev (by design; that happens at the uat -> main PR). Rationale from the LLM:"
               echo ""
-              python3 -c "
-          import json
-          try:
-              with open('$OUTPUT_DIR/evolve_summary.json') as f:
-                  data = json.load(f)
-              print(data.get('rationale') or '(no rationale recorded by evolve_cli.py for this run)')
-          except FileNotFoundError:
-              print('($OUTPUT_DIR/evolve_summary.json not found)')
-          "
+              python -m harness.rationale_cli "$OUTPUT_DIR/evolve_summary.json"
             } >> /tmp/commit_message.txt
           done < <(python -m harness.manifest procs/manifest.yaml --tsv)
 

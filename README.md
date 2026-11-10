@@ -105,6 +105,11 @@ python -m pytest
 Unit tests run against `harness/mock_connector.py`, a fixed-answer
 connector — no real database, no ODBC driver required. Use it to prove a
 new check catches the defect it's meant to catch before pointing it at UAT.
+`.github/workflows/tests.yml` runs this on every push to `dev`/`uat`/`main`
+and every PR into `main`, with no path filter — unlike the two gates below,
+which only run pytest as part of a job gated to `procs/**.sql`/
+`tests/**.yaml`. A pure `harness/**.py` change used to skip both of those
+and reach `main` with no automated test coverage at all.
 
 ## Stage 1 — dev: the auto-fix loop (harness/evolve_cli.py)
 
@@ -374,11 +379,20 @@ whoever owns data governance before it's used on anything beyond this
 repo's synthetic demo data. That requirement used to live only in a
 comment. It's now a real, enforced gate:
 `infra/deepseek_governance_approval.yaml` ships with `approved: false`,
-and `auto-fix-dev.yml` runs `python -m harness.governance_check`
-(`harness/governance_check.py`) right before it ever calls DeepSeek — a
-missing file, `approved: false`, or an `approved: true` with no
-`approved_by`/`approved_at` filled in all fail the job loudly instead of
-silently sending data.
+checked by `harness/governance_check.py` — a missing file,
+`approved: false`, or an `approved: true` with no
+`approved_by`/`approved_at` filled in all count as not approved.
+
+The actual enforcement point is **`DeepSeekLLMClient.__init__`**
+(`harness/llm_client.py`): it calls `governance_check.py` itself and
+refuses to construct at all if the file isn't approved. `auto-fix-dev.yml`
+also runs the same check as its own CI step, right before it would ever
+call DeepSeek, purely as a fail-fast — but that step was never the thing
+actually stopping DeepSeek from being called; the client is. This
+distinction mattered in practice: the first version of this gate only
+lived in the CI step, which meant a local `evolve_cli.py --provider
+deepseek` run, or any other future code path that constructed the client
+directly, would have skipped it entirely.
 
 **This gate being technically enforced does not mean the compliance work
 is done.** Getting that sign-off and editing the file (`approved: true`,
@@ -419,3 +433,23 @@ nobody got around to it.
 - **Branch protection on `uat`**: the promotion workflow pushes directly to
   `uat`. If you add a required-review rule there later, exempt the
   workflow's token or switch that step to a PR + auto-merge.
+- **No `concurrency:` group on any workflow**: one specific race (`promote`
+  failing and `validate-after-merge` getting skipped-but-still-"failed"
+  both firing `auto-fix-and-retry` for the same underlying failure) was
+  found and fixed with a conditional (`needs.validate-after-merge.result ==
+  'failure'` instead of bare `failure()`). That closes that one case, not
+  the general class — two overlapping pushes to `dev`, or two overlapping
+  calls into `auto-fix-dev.yml`, can still race on the `git push origin
+  HEAD:dev`/`uat` steps. A `concurrency: group: ${{ github.workflow }}-${{
+  github.ref }}` on each workflow would close this properly.
+- **The `[auto-fix round N/3]` cap reads the single latest commit message
+  on `dev`**, shared across every procedure in the manifest. Fine with one
+  real procedure; once a second one exists, an unrelated human commit (no
+  tag) resets the counter, and two procedures failing around the same time
+  share one round budget instead of having their own.
+- **No scrubbing of exception text before it's logged**: `promote_cli.py`
+  prints a `pyodbc` connection failure's exception text straight to
+  stderr, which lands in a public Actions log on this repo. This relies on
+  the ODBC driver never echoing the connection string (and therefore the
+  password) back in an error message — an assumption, not something this
+  harness verifies.

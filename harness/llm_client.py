@@ -8,6 +8,8 @@ import os
 import re
 from dataclasses import dataclass
 
+from harness.governance_check import check_deepseek_approved
+
 
 @dataclass
 class FixSuggestion:
@@ -61,9 +63,26 @@ class AnthropicLLMClient(LLMClient):
 
 
 class DeepSeekLLMClient(LLMClient):
-    """Same contract as AnthropicLLMClient, against DeepSeek's OpenAI-compatible API."""
+    """Same contract as AnthropicLLMClient, against DeepSeek's OpenAI-compatible API.
 
-    def __init__(self, model: str = "deepseek-chat", api_key: str | None = None, base_url: str = "https://api.deepseek.com"):
+    Refuses to construct at all unless infra/deepseek_governance_approval.yaml
+    says approved -- this is the actual enforcement point (not just the CI step
+    that happens to call governance_check.py before this gets constructed), so
+    a local run, a different workflow, or any other code path that builds this
+    client is blocked the same way, not just auto-fix-dev.yml's.
+    """
+
+    def __init__(
+        self,
+        model: str = "deepseek-chat",
+        api_key: str | None = None,
+        base_url: str = "https://api.deepseek.com",
+        governance_path: str = "infra/deepseek_governance_approval.yaml",
+    ):
+        approved, message = check_deepseek_approved(governance_path)
+        if not approved:
+            raise RuntimeError(f"DeepSeek governance check failed: {message}")
+
         self.model = model
         self.api_key = api_key or os.environ.get("DEEPSEEK_API_KEY")
         if not self.api_key:
