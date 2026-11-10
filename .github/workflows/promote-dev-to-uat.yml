@@ -143,7 +143,14 @@ jobs:
           path: reports/
           if-no-files-found: ignore
 
-  # Runs only when validate-after-merge above failed. Same shared retry as
+  # Runs only when validate-after-merge above failed -- specifically its OWN
+  # result, not failure() (which checks the whole upstream chain: promote
+  # failing would make validate-after-merge get skipped, and failure()
+  # still returns true for a skipped ancestor-failure, firing this job
+  # alongside auto-fix-and-retry above for the same promote failure -- a
+  # real race, caught by testing this for real, both jobs pushing a fix to
+  # dev at once). needs.validate-after-merge.result == 'failure' only
+  # matches validate-after-merge's own failure. Same shared retry as
   # auto-fix-and-retry above -- see auto-fix-dev.yml -- just triggered from
   # the post-merge check instead of the pre-merge one. Dev keeps iterating;
   # a converged fix pushes to dev and re-triggers this workflow, which
@@ -151,6 +158,6 @@ jobs:
   # the next successful merge simply supersedes it.
   auto-fix-and-retry-from-uat:
     needs: validate-after-merge
-    if: failure()
+    if: needs.validate-after-merge.result == 'failure'
     uses: ./.github/workflows/auto-fix-dev.yml
     secrets: inherit
