@@ -44,6 +44,10 @@ never a PR from `dev` or any other branch.
 - A `promote` job passing doesn't by itself mean `uat` is ready — check
   that `validate-after-merge` also passed on the same run before treating
   `uat` as safe to open a PR from.
+- `secrets-smoke-test.yml` is passing (run it by hand after touching any
+  secret, or trust its daily schedule) — `SYNAPSE_DEV_CONN_STR`,
+  `SYNAPSE_UAT_CONN_STR`, `DEEPSEEK_API_KEY`, and `GH_PAT` all actually
+  authenticate, not just exist.
 
 ## Red flags — stop and look
 
@@ -78,6 +82,12 @@ never a PR from `dev` or any other branch.
 - A `uat -> main` PR opened or merged without that PR's run of
   `uat-to-prd-gate.yml` showing a passing `validate-after-merge` on the
   commit it's built from.
+- A `uat -> main` PR merged without reading the 🤖 auto-fix-summary
+  comment, when `uat-to-prd-gate.yml` posted one — it means at least one
+  commit in that PR was LLM-generated, not human-written, and nobody's
+  own eyes have been on its rationale yet.
+- `secrets-smoke-test.yml` failing (on its daily schedule or a manual run)
+  with nobody looking into which secret broke and why.
 
 ## Last known-good state
 

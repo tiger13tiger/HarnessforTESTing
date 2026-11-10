@@ -1,7 +1,8 @@
 """Tests the orchestration layer: a bad check must not abort the run, and the
 pass/fail gate must only trip on blocker-severity failures or errors."""
+from harness.evolve import Iteration
 from harness.mock_connector import MockConnector
-from harness.report import gate_failed
+from harness.report import gate_failed, write_evolve_report
 from harness.runner import run_suite
 
 
@@ -32,3 +33,29 @@ def test_gate_fails_on_blocker_failure_but_not_on_warning_failure():
     assert gate_failed([result("fail", "warning")]) is False
     assert gate_failed([result("pass", "blocker")]) is False
     assert gate_failed([result("error", "warning")]) is True
+
+
+def test_evolve_report_surfaces_the_rationale_behind_the_passing_fix(tmp_path):
+    # The rationale explaining candidate 2 (the one that passed) is attached to
+    # iteration 1 (the one that failed and prompted it) -- evolve.py's own
+    # convention, not this function's. A reviewer needs to see this on the commit
+    # that actually landed the fix, which is exactly what this is written for.
+    history = [
+        Iteration(attempt=1, candidate_sql="SELECT 1", stage="validate", gate_failed=True,
+                   rationale="De-duplicated store_promotions before the join."),
+        Iteration(attempt=2, candidate_sql="SELECT 2", stage="validate", gate_failed=False),
+    ]
+    summary = write_evolve_report(success=True, history=history, output_dir=tmp_path)
+    assert summary["rationale"] == "De-duplicated store_promotions before the join."
+
+
+def test_evolve_report_has_no_rationale_when_the_first_attempt_already_passes(tmp_path):
+    history = [Iteration(attempt=1, candidate_sql="SELECT 1", stage="validate", gate_failed=False)]
+    summary = write_evolve_report(success=True, history=history, output_dir=tmp_path)
+    assert summary["rationale"] is None
+
+
+def test_evolve_report_has_no_rationale_when_the_loop_fails_outright(tmp_path):
+    history = [Iteration(attempt=1, candidate_sql="SELECT 1", stage="guardrail", error="nope")]
+    summary = write_evolve_report(success=False, history=history, output_dir=tmp_path)
+    assert summary["rationale"] is None
