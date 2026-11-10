@@ -1,0 +1,10 @@
+# Maps each candidate stored procedure to its validation suite, EXEC
+# statement, and allowed schema -- the single source of truth for which
+# procedures the pipeline (promote-dev-to-uat.yml, uat-to-prd-gate.yml,
+# auto-fix-dev.yml) actually validates/promotes/auto-fixes. Add a new
+# procedure by adding an entry here; nothing else needs to change.
+procedures:
+  - proc: procs/sp_refresh_fact_sales.example.sql
+    suite: tests/golden_fact_sales.example.yaml
+    exec_statement: "EXEC dbo.sp_refresh_fact_sales"
+    allowed_schema: dbo

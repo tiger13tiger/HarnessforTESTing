@@ -10,10 +10,11 @@ name: Promote dev -> uat (automatic)
 # from that rule, or switch the last step to open a PR and auto-merge it
 # instead of pushing directly.
 #
-# NOTE: this workflow hardcodes one proc/suite/exec-statement as a worked
-# example. With more than one stored procedure under test, replace the
-# "Deploy to UAT and validate" step with a loop over a manifest file that
-# maps each procs/*.sql to its suite and EXEC statement.
+# Every step that deploys/validates loops over procs/manifest.yaml (see
+# harness/manifest.py), so adding a new procedure is just adding an entry
+# there -- nothing in this file hardcodes a specific proc/suite/exec
+# statement. Each procedure gets its own reports/<proc-stem>/ output dir so
+# one procedure's report can't silently overwrite another's.
 #
 # Two things can fail here, and both retry the same way: a rejected
 # candidate before it ever reaches uat ("promote"), or a re-check of the
@@ -59,16 +60,23 @@ jobs:
       - name: Run unit tests
         run: python -m pytest -q
 
-      - name: Deploy to UAT and validate
+      - name: Deploy to UAT and validate (every procedure in the manifest)
         env:
           SYNAPSE_UAT_CONN_STR: ${{ secrets.SYNAPSE_UAT_CONN_STR }}
         run: |
-          python -m harness.promote_cli \
-            --proc procs/sp_refresh_fact_sales.example.sql \
-            --exec-statement "EXEC dbo.sp_refresh_fact_sales" \
-            --suite tests/golden_fact_sales.example.yaml \
-            --allowed-schema dbo \
-            --conn-env SYNAPSE_UAT_CONN_STR
+          FAILED=0
+          while IFS=$'\t' read -r proc suite exec_stmt schema; do
+            echo "::group::$proc"
+            python -m harness.promote_cli \
+              --proc "$proc" \
+              --exec-statement "$exec_stmt" \
+              --suite "$suite" \
+              --allowed-schema "$schema" \
+              --conn-env SYNAPSE_UAT_CONN_STR \
+              --output-dir "reports/$(basename "$proc" .sql)" || FAILED=1
+            echo "::endgroup::"
+          done < <(python -m harness.manifest procs/manifest.yaml --tsv)
+          exit $FAILED
 
       - name: Upload report
         if: always()
@@ -124,16 +132,23 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt
 
-      - name: Re-validate the merged uat branch against UAT
+      - name: Re-validate the merged uat branch against UAT (every procedure)
         env:
           SYNAPSE_UAT_CONN_STR: ${{ secrets.SYNAPSE_UAT_CONN_STR }}
         run: |
-          python -m harness.promote_cli \
-            --proc procs/sp_refresh_fact_sales.example.sql \
-            --exec-statement "EXEC dbo.sp_refresh_fact_sales" \
-            --suite tests/golden_fact_sales.example.yaml \
-            --allowed-schema dbo \
-            --conn-env SYNAPSE_UAT_CONN_STR
+          FAILED=0
+          while IFS=$'\t' read -r proc suite exec_stmt schema; do
+            echo "::group::$proc"
+            python -m harness.promote_cli \
+              --proc "$proc" \
+              --exec-statement "$exec_stmt" \
+              --suite "$suite" \
+              --allowed-schema "$schema" \
+              --conn-env SYNAPSE_UAT_CONN_STR \
+              --output-dir "reports/$(basename "$proc" .sql)" || FAILED=1
+            echo "::endgroup::"
+          done < <(python -m harness.manifest procs/manifest.yaml --tsv)
+          exit $FAILED
 
       - name: Upload report
         if: always()

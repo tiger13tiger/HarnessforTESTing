@@ -2,7 +2,7 @@
 pass/fail gate must only trip on blocker-severity failures or errors."""
 from harness.evolve import Iteration
 from harness.mock_connector import MockConnector
-from harness.report import gate_failed, write_evolve_report
+from harness.report import _estimate_cost, gate_failed, write_evolve_report
 from harness.runner import run_suite
 
 
@@ -59,3 +59,37 @@ def test_evolve_report_has_no_rationale_when_the_loop_fails_outright(tmp_path):
     history = [Iteration(attempt=1, candidate_sql="SELECT 1", stage="guardrail", error="nope")]
     summary = write_evolve_report(success=False, history=history, output_dir=tmp_path)
     assert summary["rationale"] is None
+
+
+def test_estimate_cost_for_a_known_model():
+    cost = _estimate_cost("deepseek-chat", {"input_tokens": 1000, "output_tokens": 1000})
+    assert cost == 0.00014 + 0.00028
+
+
+def test_estimate_cost_is_zero_without_usage():
+    assert _estimate_cost("deepseek-chat", None) == 0.0
+    assert _estimate_cost("deepseek-chat", {}) == 0.0
+
+
+def test_estimate_cost_is_zero_for_an_unknown_model_not_an_error():
+    assert _estimate_cost("some-future-model-id", {"input_tokens": 1000, "output_tokens": 1000}) == 0.0
+
+
+def test_evolve_report_totals_tokens_cost_and_model_across_the_run(tmp_path):
+    history = [
+        Iteration(attempt=1, candidate_sql="SELECT 1", stage="validate", gate_failed=True,
+                   rationale="first fix", usage={"input_tokens": 1000, "output_tokens": 500}, model="deepseek-chat"),
+        Iteration(attempt=2, candidate_sql="SELECT 2", stage="validate", gate_failed=False),
+    ]
+    summary = write_evolve_report(success=True, history=history, output_dir=tmp_path)
+    assert summary["model"] == "deepseek-chat"
+    assert summary["total_tokens"] == 1500
+    assert summary["estimated_cost_usd"] == round(0.00014 + 0.00028 * 0.5, 6)
+
+
+def test_evolve_report_totals_are_zero_when_no_llm_call_happened(tmp_path):
+    history = [Iteration(attempt=1, candidate_sql="SELECT 1", stage="validate", gate_failed=False)]
+    summary = write_evolve_report(success=True, history=history, output_dir=tmp_path)
+    assert summary["model"] == ""
+    assert summary["total_tokens"] == 0
+    assert summary["estimated_cost_usd"] == 0.0

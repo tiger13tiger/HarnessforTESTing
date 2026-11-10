@@ -1,0 +1,15 @@
+# Data-governance sign-off for sending procedure schema/logic to DeepSeek
+# (a China-based provider) -- this is a real offshore data transfer and
+# needs to be cleared by whoever owns data governance before it's used on
+# anything beyond this repo's synthetic demo data. Flip `approved: true`
+# only after that sign-off has actually happened, and fill in who/when
+# below -- this file goes through the same dev -> uat -> main review as
+# any other change, so the approval itself is auditable, not just a
+# comment nobody reads.
+#
+# harness/governance_check.py enforces this: auto-fix-dev.yml refuses to
+# call DeepSeek at all while this says approved: false.
+approved: false
+approved_by: ""
+approved_at: ""
+scope_notes: ""

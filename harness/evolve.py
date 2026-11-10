@@ -46,6 +46,8 @@ class Iteration:
     gate_failed: bool = True
     rationale: str = ""
     error: str = ""  # guardrail/deploy/exec/llm failure text; empty for a plain check failure
+    usage: dict | None = None  # the LLM call's token usage that produced the NEXT candidate
+    model: str = ""  # which model id made that call, for later drift correlation
 
 
 def _run_one_attempt(txn, candidate_sql: str, exec_statement: str, validation_suite: dict):
@@ -134,6 +136,8 @@ def evolve(
             history.append(Iteration(attempt, candidate_sql, stage="llm", error=f"LLM call failed after retries: {llm_error}"))
             break
         history[-1].rationale = suggestion.rationale
+        history[-1].usage = suggestion.usage
+        history[-1].model = llm_client.model
         candidate_sql = suggestion.sql
 
     return False, history
