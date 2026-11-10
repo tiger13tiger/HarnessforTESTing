@@ -87,10 +87,12 @@ section{margin-bottom:28px}
 .pill.warn{color:var(--warn); background:var(--warn-bg); border:1px solid color-mix(in srgb, var(--warn) 40%, transparent)}
 .pill.muted{color:var(--fg-muted); background:var(--surface-2); border:1px solid var(--border)}
 
-.branch-row{display:grid; grid-template-columns:90px 1fr auto; gap:12px; align-items:center; padding:9px 0; border-top:1px solid var(--border)}
+.branch-row{display:grid; grid-template-columns:90px 1fr auto auto; gap:12px; align-items:center; padding:9px 0; border-top:1px solid var(--border)}
 .branch-row:first-child{border-top:none}
 .branch-row .branch{font-family:var(--font-mono); font-size:13px; color:var(--fg-muted)}
 .branch-row .detail{font-size:13px; color:var(--fg-muted); min-width:0}
+.branch-row .src{font-size:12px; color:var(--accent); text-decoration:none; white-space:nowrap}
+.branch-row .src:hover{text-decoration:underline}
 
 .stat-grid{display:grid; grid-template-columns:repeat(4,1fr); gap:10px; margin-bottom:18px}
 @media (max-width:700px){.stat-grid{grid-template-columns:repeat(2,1fr)}}
@@ -150,7 +152,7 @@ footer a{color:var(--accent)}
     <div class="card">
       <div class="card-head">
         <h2>Model-drift &amp; cost log</h2>
-        <span class="pill muted">reports/metrics_log.jsonl &middot; dev</span>
+        <span><a class="src" href="https://github.com/tiger13tiger/HarnessforTESTing/blob/dev/reports/metrics_log.jsonl" target="_blank" rel="noopener" style="margin-right:8px">view source</a><span class="pill muted">reports/metrics_log.jsonl &middot; dev</span></span>
       </div>
       <div class="card-body">
         <p class="hint">One line per auto-fix attempt (converged or not): model id, token usage, estimated cost. A before/after split in success rate for one model id, over time, is what a silent provider-side model swap would look like here.</p>
@@ -265,17 +267,19 @@ async function loadGovernance() {
     let html = '';
     results.forEach((r, i) => {
       const branch = branches[i];
+      const srcUrl = `https://github.com/${OWNER}/${REPO}/blob/${branch}/infra/deepseek_governance_approval.yaml`;
+      const srcLink = `<a class="src" href="${srcUrl}" target="_blank" rel="noopener">view</a>`;
       if (r.notFound) {
-        html += `<div class="branch-row"><span class="branch">${branch}</span><span class="detail">file not found</span><span class="pill bad">BLOCKED</span></div>`;
+        html += `<div class="branch-row"><span class="branch">${branch}</span><span class="detail">file not found</span><span class="pill bad">BLOCKED</span>${srcLink}</div>`;
         return;
       }
       const data = parseFlatYaml(r.text);
       if (data.approved === true && data.approved_by && data.approved_at) {
-        html += `<div class="branch-row"><span class="branch">${branch}</span><span class="detail">approved by ${escapeHtml(data.approved_by)} on ${escapeHtml(data.approved_at)}</span><span class="pill good">APPROVED</span></div>`;
+        html += `<div class="branch-row"><span class="branch">${branch}</span><span class="detail">approved by ${escapeHtml(data.approved_by)} on ${escapeHtml(data.approved_at)}</span><span class="pill good">APPROVED</span>${srcLink}</div>`;
       } else if (data.approved === true) {
-        html += `<div class="branch-row"><span class="branch">${branch}</span><span class="detail">approved: true but approved_by/approved_at missing</span><span class="pill warn">INVALID</span></div>`;
+        html += `<div class="branch-row"><span class="branch">${branch}</span><span class="detail">approved: true but approved_by/approved_at missing</span><span class="pill warn">INVALID</span>${srcLink}</div>`;
       } else {
-        html += `<div class="branch-row"><span class="branch">${branch}</span><span class="detail">approved: false</span><span class="pill bad">BLOCKED</span></div>`;
+        html += `<div class="branch-row"><span class="branch">${branch}</span><span class="detail">approved: false</span><span class="pill bad">BLOCKED</span>${srcLink}</div>`;
       }
     });
     el.className = '';
